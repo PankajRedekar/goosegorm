@@ -56,6 +56,9 @@ func (g *Generator) generateMigrationContent(version, name string, diffs []diff.
 	sb.WriteString("import (\n")
 	sb.WriteString("\t\"gorm.io/gorm\"\n")
 	sb.WriteString("\t\"github.com/pankajredekar/goosegorm\"\n")
+	if needsTimeImport(diffs) {
+		sb.WriteString("\t\"time\"\n")
+	}
 	sb.WriteString(")\n\n")
 
 	// Migration struct
@@ -74,8 +77,11 @@ func (g *Generator) generateMigrationContent(version, name string, diffs []diff.
 	sb.WriteString(g.generateUpSimulation(diffs))
 	sb.WriteString("\t\treturn nil\n")
 	sb.WriteString("\t}\n\n")
-	sb.WriteString(g.generateUpRealDB(diffs))
-	sb.WriteString("\treturn nil\n")
+	upRealDB := g.generateUpRealDB(diffs)
+	sb.WriteString(upRealDB)
+	if !strings.Contains(upRealDB, "return ") {
+		sb.WriteString("\treturn nil\n")
+	}
 	sb.WriteString("}\n\n")
 
 	// Down method
@@ -84,8 +90,11 @@ func (g *Generator) generateMigrationContent(version, name string, diffs []diff.
 	sb.WriteString(g.generateDownSimulation(diffs))
 	sb.WriteString("\t\treturn nil\n")
 	sb.WriteString("\t}\n\n")
-	sb.WriteString(g.generateDownRealDB(diffs))
-	sb.WriteString("\treturn nil\n")
+	downRealDB := g.generateDownRealDB(diffs)
+	sb.WriteString(downRealDB)
+	if !strings.Contains(downRealDB, "return ") {
+		sb.WriteString("\treturn nil\n")
+	}
 	sb.WriteString("}\n\n")
 
 	// Init function
@@ -167,21 +176,71 @@ func (g *Generator) generateUpRealDB(diffs []diff.Diff) string {
 	var sb strings.Builder
 	sb.WriteString("\t// Real DB mode\n")
 
+	// Track structs to avoid duplicates
+	definedStructs := make(map[string]bool)
+
 	for _, d := range diffs {
 		switch d.Type {
 		case "create_table":
-			// Generate AutoMigrate call - would need model type
-			sb.WriteString(fmt.Sprintf("\t// TODO: AutoMigrate model for table %s\n", d.TableName))
+			// Generate struct definition and AutoMigrate
+			structName := toPascalCase(d.TableName)
+			if !definedStructs[structName] {
+				sb.WriteString(fmt.Sprintf("\ttype %s struct {\n", structName))
+				for _, col := range d.Table.Columns {
+					fieldName := toPascalCase(col.Name)
+					goType := mapSQLTypeToGo(col.Type, col.PK)
+					gormTags := buildGormTags(col)
+					sb.WriteString(fmt.Sprintf("\t\t%s %s `%s`\n", fieldName, goType, gormTags))
+				}
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+				definedStructs[structName] = true
+			}
+			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").AutoMigrate(&%s{}); err != nil {\n", d.TableName, structName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "drop_table":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Drop table %s\n", d.TableName))
+			// Use Migrator().DropTable with table name directly
+			sb.WriteString(fmt.Sprintf("\tif err := db.Migrator().DropTable(\"%s\"); err != nil {\n", d.TableName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "add_column":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Add column %s to table %s\n", d.Column.Name, d.TableName))
+			// Use Migrator().AddColumn with a struct containing the field
+			structName := toPascalCase(d.TableName)
+			fieldName := toPascalCase(d.Column.Name)
+			structKey := structName + "_" + fieldName
+			if !definedStructs[structKey] {
+				goType := mapSQLTypeToGo(d.Column.Type, d.Column.PK)
+				gormTags := buildGormTags(d.Column)
+				sb.WriteString(fmt.Sprintf("\ttype %s%s struct {\n", structName, fieldName))
+				sb.WriteString(fmt.Sprintf("\t\t%s %s `%s`\n", fieldName, goType, gormTags))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+				definedStructs[structKey] = true
+			}
+			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").Migrator().AddColumn(&%s%s{}, \"%s\"); err != nil {\n", d.TableName, structName, fieldName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "drop_column":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Drop column %s from table %s\n", d.Column.Name, d.TableName))
+			// Use Migrator().DropColumn with table name
+			fieldName := toPascalCase(d.Column.Name)
+			sb.WriteString(fmt.Sprintf("\tif err := db.Migrator().DropColumn(\"%s\", \"%s\"); err != nil {\n", d.TableName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "modify_column":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Modify column %s in table %s\n", d.Column.Name, d.TableName))
+			// Use AutoMigrate with updated struct
+			structName := toPascalCase(d.TableName)
+			fieldName := toPascalCase(d.Column.Name)
+			goType := mapSQLTypeToGo(d.Column.Type, d.Column.PK)
+			gormTags := buildGormTags(d.Column)
+			sb.WriteString(fmt.Sprintf("\ttype %s%s struct {\n", structName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\t%s %s `%s`\n", fieldName, goType, gormTags))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
+			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").AutoMigrate(&%s%s{}); err != nil {\n", d.TableName, structName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		}
 	}
+
+	sb.WriteString("\treturn nil\n")
 
 	return sb.String()
 }
@@ -190,21 +249,69 @@ func (g *Generator) generateDownRealDB(diffs []diff.Diff) string {
 	var sb strings.Builder
 	sb.WriteString("\t// Real DB mode - reverse operations\n")
 
+	// Track structs to avoid duplicates
+	definedStructs := make(map[string]bool)
+
 	for i := len(diffs) - 1; i >= 0; i-- {
 		d := diffs[i]
 		switch d.Type {
 		case "create_table":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Drop table %s\n", d.TableName))
+			// Reverse: Drop table
+			sb.WriteString(fmt.Sprintf("\tif err := db.Migrator().DropTable(\"%s\"); err != nil {\n", d.TableName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "drop_table":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Recreate table %s\n", d.TableName))
+			// Reverse: Recreate table (would need original structure, simplified for now)
+			sb.WriteString(fmt.Sprintf("\t// Note: Recreating table %s requires original structure\n", d.TableName))
+			sb.WriteString(fmt.Sprintf("\t// This is a simplified implementation - adjust as needed\n"))
+			structName := toPascalCase(d.TableName)
+			if !definedStructs[structName] {
+				sb.WriteString(fmt.Sprintf("\ttype %s struct {\n", structName))
+				sb.WriteString(fmt.Sprintf("\t\tID uint `gorm:\"primaryKey\"`\n"))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+				definedStructs[structName] = true
+			}
+			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").AutoMigrate(&%s{}); err != nil {\n", d.TableName, structName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "add_column":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Drop column %s from table %s\n", d.Column.Name, d.TableName))
+			// Reverse: Drop column
+			fieldName := toPascalCase(d.Column.Name)
+			sb.WriteString(fmt.Sprintf("\tif err := db.Migrator().DropColumn(\"%s\", \"%s\"); err != nil {\n", d.TableName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "drop_column":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Add column %s to table %s\n", d.Column.Name, d.TableName))
+			// Reverse: Add column back
+			structName := toPascalCase(d.TableName)
+			fieldName := toPascalCase(d.Column.Name)
+			structKey := structName + "_" + fieldName
+			if !definedStructs[structKey] {
+				goType := mapSQLTypeToGo(d.Column.Type, d.Column.PK)
+				gormTags := buildGormTags(d.Column)
+				sb.WriteString(fmt.Sprintf("\ttype %s%s struct {\n", structName, fieldName))
+				sb.WriteString(fmt.Sprintf("\t\t%s %s `%s`\n", fieldName, goType, gormTags))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+				definedStructs[structKey] = true
+			}
+			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").Migrator().AddColumn(&%s%s{}, \"%s\"); err != nil {\n", d.TableName, structName, fieldName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		case "modify_column":
-			sb.WriteString(fmt.Sprintf("\t// TODO: Revert column %s in table %s\n", d.Column.Name, d.TableName))
+			// Reverse: Revert to old type
+			structName := toPascalCase(d.TableName)
+			fieldName := toPascalCase(d.Column.Name)
+			goType := mapSQLTypeToGo(d.Column.OldType, d.Column.PK)
+			gormTags := buildGormTags(d.Column)
+			sb.WriteString(fmt.Sprintf("\ttype %s%s struct {\n", structName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\t%s %s `%s`\n", fieldName, goType, gormTags))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
+			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").AutoMigrate(&%s%s{}); err != nil {\n", d.TableName, structName, fieldName))
+			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+			sb.WriteString(fmt.Sprintf("\t}\n"))
 		}
 	}
+
+	sb.WriteString("\treturn nil\n")
 
 	return sb.String()
 }
@@ -231,4 +338,85 @@ func toCamelCase(s string) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// toPascalCase converts snake_case to PascalCase
+func toPascalCase(s string) string {
+	return toCamelCase(s)
+}
+
+// mapSQLTypeToGo converts SQL type string to Go type
+func mapSQLTypeToGo(sqlType string, isPK bool) string {
+	switch sqlType {
+	case "bigint":
+		if isPK {
+			return "uint"
+		}
+		return "int64"
+	case "integer":
+		if isPK {
+			return "uint"
+		}
+		return "int32"
+	case "smallint":
+		return "int16"
+	case "tinyint":
+		return "int8"
+	case "string":
+		return "string"
+	case "float":
+		return "float64"
+	case "bool":
+		return "bool"
+	case "timestamp":
+		return "time.Time"
+	default:
+		return "string"
+	}
+}
+
+// buildGormTags builds GORM tags from column information
+func buildGormTags(col *diff.ColumnDiff) string {
+	var tags []string
+
+	if col.PK {
+		tags = append(tags, "primaryKey")
+	}
+
+	if col.Unique {
+		tags = append(tags, "uniqueIndex")
+	}
+
+	if !col.Null {
+		tags = append(tags, "not null")
+	}
+
+	if len(tags) == 0 {
+		return "gorm:\"\""
+	}
+
+	return fmt.Sprintf("gorm:\"%s\"", strings.Join(tags, ";"))
+}
+
+// buildGormTagsWithTableName builds GORM tags with table name specification
+func buildGormTagsWithTableName(col *diff.ColumnDiff, tableName string) string {
+	// Table name is handled via db.Table() in AutoMigrate, not in tags
+	return buildGormTags(col)
+}
+
+// needsTimeImport checks if any diff requires time.Time type
+func needsTimeImport(diffs []diff.Diff) bool {
+	for _, d := range diffs {
+		if d.Table != nil {
+			for _, col := range d.Table.Columns {
+				if col.Type == "timestamp" {
+					return true
+				}
+			}
+		}
+		if d.Column != nil && d.Column.Type == "timestamp" {
+			return true
+		}
+	}
+	return false
 }
