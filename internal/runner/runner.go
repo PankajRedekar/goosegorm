@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"unsafe"
 
 	"github.com/pankajredekar/goosegorm/internal/schema"
 	"github.com/pankajredekar/goosegorm/internal/versioner"
@@ -212,8 +213,34 @@ func callMigrationUp(m Migration, db interface{}) error {
 		return fmt.Errorf("migration does not have Up method")
 	}
 
+	// Get the method's parameter type
+	methodType := method.Type()
+	if methodType.NumIn() == 0 {
+		return fmt.Errorf("Up method has no parameters")
+	}
+
+	paramType := methodType.In(0)
+
+	// Convert db to the expected type
+	var arg reflect.Value
+	dbValue := reflect.ValueOf(db)
+
+	if dbValue.Type().AssignableTo(paramType) {
+		// Types match, use directly
+		arg = dbValue
+	} else if paramType.Kind() == reflect.Ptr && dbValue.Kind() == reflect.Ptr {
+		// Both are pointers but different types (e.g., *schema.SchemaBuilder -> *gorm.DB)
+		// Use unsafe to convert: create a pointer of the target type pointing to the same address
+		// This is safe because migrations check the actual type at runtime using type assertions
+		ptr := unsafe.Pointer(dbValue.Pointer())
+		arg = reflect.NewAt(paramType.Elem(), ptr).Elem().Addr()
+	} else {
+		// Try direct assignment (might work for interface types)
+		arg = dbValue
+	}
+
 	// Call Up method with db as argument
-	results := method.Call([]reflect.Value{reflect.ValueOf(db)})
+	results := method.Call([]reflect.Value{arg})
 
 	if len(results) > 0 && !results[0].IsNil() {
 		if err, ok := results[0].Interface().(error); ok {
@@ -232,8 +259,34 @@ func callMigrationDown(m Migration, db interface{}) error {
 		return fmt.Errorf("migration does not have Down method")
 	}
 
+	// Get the method's parameter type
+	methodType := method.Type()
+	if methodType.NumIn() == 0 {
+		return fmt.Errorf("Down method has no parameters")
+	}
+
+	paramType := methodType.In(0)
+
+	// Convert db to the expected type
+	var arg reflect.Value
+	dbValue := reflect.ValueOf(db)
+
+	if dbValue.Type().AssignableTo(paramType) {
+		// Types match, use directly
+		arg = dbValue
+	} else if paramType.Kind() == reflect.Ptr && dbValue.Kind() == reflect.Ptr {
+		// Both are pointers but different types (e.g., *schema.SchemaBuilder -> *gorm.DB)
+		// Use unsafe to convert: create a pointer of the target type pointing to the same address
+		// This is safe because migrations check the actual type at runtime using type assertions
+		ptr := unsafe.Pointer(dbValue.Pointer())
+		arg = reflect.NewAt(paramType.Elem(), ptr).Elem().Addr()
+	} else {
+		// Try direct assignment (might work for interface types)
+		arg = dbValue
+	}
+
 	// Call Down method with db as argument
-	results := method.Call([]reflect.Value{reflect.ValueOf(db)})
+	results := method.Call([]reflect.Value{arg})
 
 	if len(results) > 0 && !results[0].IsNil() {
 		if err, ok := results[0].Interface().(error); ok {

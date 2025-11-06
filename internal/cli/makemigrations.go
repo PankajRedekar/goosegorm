@@ -8,6 +8,7 @@ import (
 	"github.com/pankajredekar/goosegorm/internal/config"
 	"github.com/pankajredekar/goosegorm/internal/diff"
 	"github.com/pankajredekar/goosegorm/internal/generator"
+	"github.com/pankajredekar/goosegorm/internal/loader"
 	"github.com/pankajredekar/goosegorm/internal/modelreflect"
 	"github.com/pankajredekar/goosegorm/internal/runner"
 	"github.com/pankajredekar/goosegorm/internal/utils"
@@ -37,7 +38,7 @@ var makemigrationsCmd = &cobra.Command{
 		}
 
 		// Load existing migrations
-		registry, err := loadMigrationsFromDir(cfg.MigrationsDir)
+		registry, err := loadMigrationsFromDir(cfg.MigrationsDir, cfg.PackageName)
 		if err != nil {
 			utils.PrintError("Failed to load migrations: %v", err)
 			os.Exit(1)
@@ -122,15 +123,9 @@ func generateMigrationName(diffs []diff.Diff) string {
 	return strings.Join(parts, "_and_")
 }
 
-func loadMigrationsFromDir(dir string) (*runner.Registry, error) {
-	registry := runner.NewRegistry()
-
-	// This is a simplified loader - in a real implementation, you'd need to
-	// actually compile and import the migrations package
-	// For now, we'll just return an empty registry
-	// The actual loading would happen when migrations are imported
-
-	return registry, nil
+func loadMigrationsFromDir(dir string, packageName string) (*runner.Registry, error) {
+	// Use the loader package to load migrations
+	return loader.LoadMigrationsFromAST(dir, packageName)
 }
 
 func init() {
