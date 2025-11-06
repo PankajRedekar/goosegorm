@@ -399,16 +399,14 @@ func generateVersion() string {
 	}
 
 	// Format: YYYYMMDDHHMMSS + 4-digit sequence (0001-9999)
+	// Always include sequence, starting from 0001
 	baseVersion := fmt.Sprintf("%04d%02d%02d%02d%02d%02d",
 		now.Year(), now.Month(), now.Day(),
 		now.Hour(), now.Minute(), now.Second())
 
-	// Add sequence number if we're in the same second
-	if versionCounter > 0 {
-		return fmt.Sprintf("%s%04d", baseVersion, versionCounter)
-	}
-
-	return baseVersion
+	// Always add sequence number (starts at 0001)
+	versionCounter++
+	return fmt.Sprintf("%s%04d", baseVersion, versionCounter)
 }
 
 func sanitizeName(name string) string {

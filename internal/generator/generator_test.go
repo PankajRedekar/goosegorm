@@ -127,9 +127,9 @@ func TestGenerateMigration_AddColumn(t *testing.T) {
 
 func TestGenerateVersion(t *testing.T) {
 	version := generateVersion()
-	// Version can be 14 (YYYYMMDDHHMMSS) or 18 (YYYYMMDDHHMMSS + 4-digit sequence)
-	if len(version) != 14 && len(version) != 18 {
-		t.Errorf("Expected version length 14 (YYYYMMDDHHMMSS) or 18 (with sequence), got %d", len(version))
+	// Version should always be 18 characters (YYYYMMDDHHMMSS + 4-digit sequence)
+	if len(version) != 18 {
+		t.Errorf("Expected version length 18 (YYYYMMDDHHMMSS + sequence), got %d", len(version))
 	}
 
 	// Version should be numeric
@@ -141,23 +141,25 @@ func TestGenerateVersion(t *testing.T) {
 	}
 
 	// First 14 characters should be valid timestamp
-	if len(version) >= 14 {
-		baseVersion := version[:14]
-		if len(baseVersion) != 14 {
-			t.Errorf("Base version should be 14 characters, got %d", len(baseVersion))
-		}
+	baseVersion := version[:14]
+	if len(baseVersion) != 14 {
+		t.Errorf("Base version should be 14 characters, got %d", len(baseVersion))
 	}
 
-	// If version has sequence, it should be 4 digits
-	if len(version) == 18 {
-		sequence := version[14:]
-		if len(sequence) != 4 {
-			t.Errorf("Sequence should be 4 digits, got %d: %s", len(sequence), sequence)
-		}
-		// Sequence should start from 0001, not 0000
-		if sequence == "0000" {
-			t.Errorf("Sequence should not be 0000, got %s", sequence)
-		}
+	// Sequence should be 4 digits and start from 0001
+	sequence := version[14:]
+	if len(sequence) != 4 {
+		t.Errorf("Sequence should be 4 digits, got %d: %s", len(sequence), sequence)
+	}
+	// Sequence should start from 0001, not 0000
+	if sequence == "0000" {
+		t.Errorf("Sequence should not be 0000, got %s", sequence)
+	}
+	seqNum, err := strconv.Atoi(sequence)
+	if err != nil {
+		t.Errorf("Sequence should be numeric, got %s", sequence)
+	} else if seqNum < 1 {
+		t.Errorf("Sequence should be at least 0001, got %s", sequence)
 	}
 }
 
