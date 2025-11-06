@@ -163,6 +163,92 @@ func TestGetTableName(t *testing.T) {
 	}
 }
 
+func TestToSnakeCase_IDHandling(t *testing.T) {
+	// Test that ID field converts to "id" (lowercase), not "i_d"
+	model := &ParsedModel{
+		Name: "User",
+		Fields: []Field{
+			{Name: "ID", Type: "uint"},
+			{Name: "UserName", Type: "string"},
+		},
+	}
+
+	// Check that ID field name converts correctly
+	for _, field := range model.Fields {
+		colName := toSnakeCase(field.Name)
+		if field.Name == "ID" && colName != "id" {
+			t.Errorf("Expected 'ID' to convert to 'id', got '%s'", colName)
+		}
+		if field.Name == "UserName" && colName != "user_name" {
+			t.Errorf("Expected 'UserName' to convert to 'user_name', got '%s'", colName)
+		}
+	}
+}
+
+func TestToSnakeCase_AllUppercase(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ID", "id"},                     // All uppercase -> all lowercase
+		{"UUID", "uuid"},                 // All uppercase -> all lowercase
+		{"API", "api"},                   // All uppercase -> all lowercase
+		{"HTTP", "http"},                 // All uppercase -> all lowercase
+		{"XML", "xml"},                   // All uppercase -> all lowercase
+		{"JSON", "json"},                 // All uppercase -> all lowercase
+		{"URL", "url"},                   // All uppercase -> all lowercase
+		{"HTML", "html"},                 // All uppercase -> all lowercase
+		{"CSS", "css"},                   // All uppercase -> all lowercase
+		{"JS", "js"},                     // All uppercase -> all lowercase
+		{"UserID", "user_i_d"},           // Mixed case -> snake_case (each uppercase letter gets underscore)
+		{"APIKey", "a_p_i_key"},          // Mixed case -> snake_case
+		{"HTTPClient", "h_t_t_p_client"}, // Mixed case -> snake_case
+		{"UserName", "user_name"},        // Mixed case -> snake_case
+		{"id", "id"},                     // Already lowercase
+		{"userId", "user_id"},            // camelCase -> snake_case (I is uppercase)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := toSnakeCase(tt.input)
+			if result != tt.expected {
+				t.Errorf("toSnakeCase(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsAllUppercase(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"ID", true},
+		{"UUID", true},
+		{"API", true},
+		{"HTTP", true},
+		{"XML", true},
+		{"JSON", true},
+		{"URL", true},
+		{"UserID", false},
+		{"APIKey", false},
+		{"id", false},
+		{"userId", false},
+		{"", false},
+		{"ID123", false},  // Contains numbers
+		{"ID_Key", false}, // Contains underscore
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := isAllUppercase(tt.input)
+			if result != tt.expected {
+				t.Errorf("isAllUppercase(%q) = %v, expected %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestShouldIgnore(t *testing.T) {
 	model := &ParsedModel{
 		Name: "User",

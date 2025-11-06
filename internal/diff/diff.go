@@ -201,6 +201,12 @@ func isUnique(gormTag string) bool {
 }
 
 func toSnakeCase(s string) string {
+	// Special case: If all uppercase letters, convert to all lowercase (not snake_case)
+	// e.g., "ID" -> "id", "UUID" -> "uuid", "API" -> "api"
+	if isAllUppercase(s) {
+		return strings.ToLower(s)
+	}
+
 	var result strings.Builder
 	for i, r := range s {
 		if i > 0 && r >= 'A' && r <= 'Z' {
@@ -209,4 +215,17 @@ func toSnakeCase(s string) string {
 		result.WriteRune(r)
 	}
 	return strings.ToLower(result.String())
+}
+
+// isAllUppercase checks if a string contains only uppercase letters
+func isAllUppercase(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }

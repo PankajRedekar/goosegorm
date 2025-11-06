@@ -103,10 +103,17 @@ func (g *Generator) generateUpSimulation(diffs []diff.Diff) string {
 	for _, d := range diffs {
 		switch d.Type {
 		case "create_table":
-			sb.WriteString(fmt.Sprintf("\t\tsim.CreateTable(\"%s\")\n", d.TableName))
-			for _, col := range d.Table.Columns {
-				sb.WriteString(fmt.Sprintf("\t\t\t.AddColumnWithOptions(\"%s\", \"%s\", %v, %v, %v)\n",
-					col.Name, col.Type, col.Null, col.PK, col.Unique))
+			sb.WriteString(fmt.Sprintf("\t\tsim.CreateTable(\"%s\").\n", d.TableName))
+			for i, col := range d.Table.Columns {
+				if i == len(d.Table.Columns)-1 {
+					// Last column, no trailing dot
+					sb.WriteString(fmt.Sprintf("\t\t\tAddColumnWithOptions(\"%s\", \"%s\", %v, %v, %v)\n",
+						col.Name, col.Type, col.Null, col.PK, col.Unique))
+				} else {
+					// Not last column, add trailing dot
+					sb.WriteString(fmt.Sprintf("\t\t\tAddColumnWithOptions(\"%s\", \"%s\", %v, %v, %v).\n",
+						col.Name, col.Type, col.Null, col.PK, col.Unique))
+				}
 			}
 			sb.WriteString("\t\t\n")
 		case "drop_table":
