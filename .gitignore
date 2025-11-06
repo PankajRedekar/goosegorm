@@ -4,7 +4,8 @@
 *.dll
 *.so
 *.dylib
-goosegorm
+/goosegorm
+/goosegorm.exe
 
 # Test binary, built with `go test -c`
 *.test
