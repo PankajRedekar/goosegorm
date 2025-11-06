@@ -1,0 +1,259 @@
+package modelreflect
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestParseModelsFromDir(t *testing.T) {
+	// Create a temporary directory with test models
+	tmpDir := t.TempDir()
+
+	modelsDir := filepath.Join(tmpDir, "models")
+	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+		t.Fatalf("Failed to create models directory: %v", err)
+	}
+
+	// Create test model file
+	modelFile := filepath.Join(modelsDir, "user.go")
+	content := `package models
+
+type User struct {
+	ID    uint   ` + "`gorm:\"primaryKey\"`" + `
+	Name  string
+	Email string ` + "`gorm:\"uniqueIndex\"`" + `
+}
+
+//goosegorm:"managed:false"
+type Legacy struct {
+	ID int
+}
+`
+	if err := os.WriteFile(modelFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write model file: %v", err)
+	}
+
+	models, err := ParseModelsFromDir(modelsDir, nil)
+	if err != nil {
+		t.Fatalf("ParseModelsFromDir failed: %v", err)
+	}
+
+	if len(models) != 2 {
+		t.Errorf("Expected 2 models, got %d", len(models))
+	}
+
+	// Check User model
+	userModel := findModel(models, "User")
+	if userModel == nil {
+		t.Fatal("User model not found")
+	}
+	if !userModel.Managed {
+		t.Error("User model should be managed")
+	}
+	if len(userModel.Fields) != 3 {
+		t.Errorf("Expected 3 fields in User, got %d", len(userModel.Fields))
+	}
+
+	// Check Legacy model
+	legacyModel := findModel(models, "Legacy")
+	if legacyModel == nil {
+		t.Fatal("Legacy model not found")
+	}
+	if legacyModel.Managed {
+		t.Error("Legacy model should not be managed")
+	}
+}
+
+func TestParseModelsWithManagedTag(t *testing.T) {
+	tmpDir := t.TempDir()
+	modelsDir := filepath.Join(tmpDir, "models")
+	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+		t.Fatalf("Failed to create models directory: %v", err)
+	}
+
+	modelFile := filepath.Join(modelsDir, "test.go")
+	content := `package models
+
+//goosegorm:"managed:true"
+type ManagedModel struct {
+	ID uint
+}
+
+//goosegorm:"managed:false"
+type UnmanagedModel struct {
+	ID int
+}
+
+type DefaultModel struct {
+	ID int
+}
+`
+	if err := os.WriteFile(modelFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write model file: %v", err)
+	}
+
+	models, err := ParseModelsFromDir(modelsDir, nil)
+	if err != nil {
+		t.Fatalf("ParseModelsFromDir failed: %v", err)
+	}
+
+	managed := findModel(models, "ManagedModel")
+	if managed == nil || !managed.Managed {
+		t.Error("ManagedModel should be managed")
+	}
+
+	unmanaged := findModel(models, "UnmanagedModel")
+	if unmanaged == nil || unmanaged.Managed {
+		t.Error("UnmanagedModel should not be managed")
+	}
+
+	defaultModel := findModel(models, "DefaultModel")
+	if defaultModel == nil || !defaultModel.Managed {
+		t.Error("DefaultModel should be managed by default")
+	}
+}
+
+func TestParseModelsWithIgnoreList(t *testing.T) {
+	tmpDir := t.TempDir()
+	modelsDir := filepath.Join(tmpDir, "models")
+	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+		t.Fatalf("Failed to create models directory: %v", err)
+	}
+
+	modelFile := filepath.Join(modelsDir, "test.go")
+	content := `package models
+
+type User struct {
+	ID uint
+}
+
+type Ignored struct {
+	ID int
+}
+`
+	if err := os.WriteFile(modelFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write model file: %v", err)
+	}
+
+	ignoreList := []string{"Ignored"}
+	models, err := ParseModelsFromDir(modelsDir, ignoreList)
+	if err != nil {
+		t.Fatalf("ParseModelsFromDir failed: %v", err)
+	}
+
+	if len(models) != 1 {
+		t.Errorf("Expected 1 model (Ignored should be filtered), got %d", len(models))
+	}
+
+	if findModel(models, "Ignored") != nil {
+		t.Error("Ignored model should not be in results")
+	}
+}
+
+func TestGetTableName(t *testing.T) {
+	model := &ParsedModel{
+		Name: "UserProfile",
+	}
+
+	tableName := model.GetTableName()
+	expected := "user_profile"
+	if tableName != expected {
+		t.Errorf("Expected table name '%s', got '%s'", expected, tableName)
+	}
+}
+
+func TestShouldIgnore(t *testing.T) {
+	model := &ParsedModel{
+		Name: "User",
+	}
+
+	ignoreList := []string{"User", "Post"}
+	if !model.ShouldIgnore(ignoreList) {
+		t.Error("User should be ignored")
+	}
+
+	ignoreList = []string{"Post"}
+	if model.ShouldIgnore(ignoreList) {
+		t.Error("User should not be ignored")
+	}
+}
+
+func TestParseFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	modelsDir := filepath.Join(tmpDir, "models")
+	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+		t.Fatalf("Failed to create models directory: %v", err)
+	}
+
+	modelFile := filepath.Join(modelsDir, "test.go")
+	content := `package models
+
+type User struct {
+	ID    uint   ` + "`gorm:\"primaryKey\"`" + `
+	Name  string
+	Email string ` + "`gorm:\"uniqueIndex\"`" + `
+	Age   int    ` + "`goosegorm:\"managed:false\"`" + `
+}
+`
+	if err := os.WriteFile(modelFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write model file: %v", err)
+	}
+
+	models, err := ParseModelsFromDir(modelsDir, nil)
+	if err != nil {
+		t.Fatalf("ParseModelsFromDir failed: %v", err)
+	}
+
+	user := findModel(models, "User")
+	if user == nil {
+		t.Fatal("User model not found")
+	}
+
+	// Check field parsing
+	if len(user.Fields) != 4 {
+		t.Errorf("Expected 4 fields, got %d", len(user.Fields))
+	}
+
+	idField := findField(user.Fields, "ID")
+	if idField == nil {
+		t.Fatal("ID field not found")
+	}
+	if idField.Type != "uint" {
+		t.Errorf("Expected ID type 'uint', got '%s'", idField.Type)
+	}
+	if !contains(idField.GormTag, "primaryKey") {
+		t.Error("ID should have primaryKey tag")
+	}
+}
+
+func findModel(models []ParsedModel, name string) *ParsedModel {
+	for i := range models {
+		if models[i].Name == name {
+			return &models[i]
+		}
+	}
+	return nil
+}
+
+func findField(fields []Field, name string) *Field {
+	for i := range fields {
+		if fields[i].Name == name {
+			return &fields[i]
+		}
+	}
+	return nil
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsAt(s, substr))
+}
+
+func containsAt(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

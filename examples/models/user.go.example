@@ -1,0 +1,15 @@
+package models
+
+// User model - managed by migrations
+type User struct {
+	ID    uint   `gorm:"primaryKey"`
+	Name  string
+	Email string `gorm:"uniqueIndex"`
+}
+
+// LegacyTransaction model - excluded from migrations
+//goosegorm:"managed:false"
+type LegacyTransaction struct {
+	ID   int
+	Note string
+}

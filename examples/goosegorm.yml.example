@@ -1,0 +1,6 @@
+database_url: postgres://user:pass@localhost:5432/myapp?sslmode=disable
+models_dir: ./models
+migrations_dir: ./migrations
+package_name: migrations
+migration_table: _goosegorm_migrations
+ignore_models: []
