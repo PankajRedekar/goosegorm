@@ -123,14 +123,14 @@ func TestCompareSchema_ModifyColumn(t *testing.T) {
 					AddColumnWithOptions("id", "uint", false, true, false). // PK
 					AddColumn("age", "int")
 
-	// Models with different column type
+	// Models with different column type (int -> int32, which maps to bigint -> integer)
 	models := []modelreflect.ParsedModel{
 		{
 			Name:    "User",
 			Managed: true,
 			Fields: []modelreflect.Field{
 				{Name: "ID", Type: "uint", GormTag: "primaryKey"},
-				{Name: "Age", Type: "uint"},
+				{Name: "Age", Type: "int32"}, // int32 maps to "integer", different from "int" which maps to "bigint"
 			},
 		},
 	}
@@ -140,13 +140,13 @@ func TestCompareSchema_ModifyColumn(t *testing.T) {
 		t.Fatalf("CompareSchema failed: %v", err)
 	}
 
-	// Should have modify_column diff for age (int -> uint)
+	// Should have modify_column diff for age (int -> int32, which is bigint -> integer)
 	modifyColumnDiffs := 0
 	for _, d := range diffs {
 		if d.Type == "modify_column" && d.Column.Name == "age" {
 			modifyColumnDiffs++
-			if d.Column.Type != "uint" {
-				t.Errorf("Expected column type 'uint', got '%s'", d.Column.Type)
+			if d.Column.Type != "integer" {
+				t.Errorf("Expected column type 'integer', got '%s'", d.Column.Type)
 			}
 		}
 	}
@@ -232,10 +232,16 @@ func TestMapGoTypeToSQLType(t *testing.T) {
 		expected string
 	}{
 		{"string", "string"},
-		{"int", "int"},
-		{"uint", "uint"},
-		{"int64", "int"},
-		{"uint64", "uint"},
+		{"int", "bigint"},
+		{"uint", "bigint"},
+		{"int8", "tinyint"},
+		{"int16", "smallint"},
+		{"int32", "integer"},
+		{"int64", "bigint"},
+		{"uint8", "tinyint"},
+		{"uint16", "smallint"},
+		{"uint32", "integer"},
+		{"uint64", "bigint"},
 		{"float32", "float"},
 		{"float64", "float"},
 		{"bool", "bool"},

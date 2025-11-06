@@ -173,10 +173,22 @@ func mapGoTypeToSQLType(goType string) string {
 	switch goType {
 	case "string":
 		return "string"
-	case "int", "int8", "int16", "int32", "int64":
-		return "int"
-	case "uint", "uint8", "uint16", "uint32", "uint64":
-		return "uint"
+	case "int", "int64":
+		return "bigint"
+	case "int8":
+		return "tinyint"
+	case "int16":
+		return "smallint"
+	case "int32":
+		return "integer"
+	case "uint", "uint64":
+		return "bigint"
+	case "uint8":
+		return "tinyint"
+	case "uint16":
+		return "smallint"
+	case "uint32":
+		return "integer"
 	case "float32", "float64":
 		return "float"
 	case "bool":
