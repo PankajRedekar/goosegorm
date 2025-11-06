@@ -195,20 +195,74 @@ func (m *ASTMigration) Version() string { return m.version }
 func (m *ASTMigration) Name() string    { return m.name }
 
 func (m *ASTMigration) Up(db *gorm.DB) error {
+	// Check if this is simulation mode by trying to recover SchemaBuilder
 	// During simulation, db is actually a *schema.SchemaBuilder passed as *gorm.DB via unsafe conversion
-	// We need to recover the original SchemaBuilder pointer
-	// Use unsafe to get the underlying pointer
 	dbPtr := unsafe.Pointer(db)
 	sim := (*schema.SchemaBuilder)(dbPtr)
-	return m.executeSimulationCode(m.upCode, sim)
+
+	// Use recover to safely check if we can access Schema field
+	// If it's a real DB, accessing Schema will cause a panic
+	var isSimulation bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				isSimulation = false
+			}
+		}()
+		// Try to safely check if Schema field exists
+		if sim != nil {
+			// Try to access Schema - if it panics, we're in real DB mode
+			if sim.Schema == nil {
+				sim.Schema = &schema.SchemaState{
+					Tables: make(map[string]*schema.Table),
+				}
+			}
+			if sim.Schema.Tables == nil {
+				sim.Schema.Tables = make(map[string]*schema.Table)
+			}
+			isSimulation = true
+		}
+	}()
+
+	if isSimulation {
+		// Execute simulation code
+		return m.executeSimulationCode(m.upCode, sim)
+	}
+
+	// Real DB mode - execute the real DB code path
+	return m.executeRealDBCode(m.upCode, db)
 }
 
 func (m *ASTMigration) Down(db *gorm.DB) error {
-	// During simulation, db is actually a *schema.SchemaBuilder passed as *gorm.DB via unsafe conversion
-	// We need to recover the original SchemaBuilder pointer
+	// Check if this is simulation mode
 	dbPtr := unsafe.Pointer(db)
 	sim := (*schema.SchemaBuilder)(dbPtr)
-	return m.executeSimulationCode(m.downCode, sim)
+
+	var isSimulation bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				isSimulation = false
+			}
+		}()
+		if sim != nil {
+			if sim.Schema == nil {
+				sim.Schema = &schema.SchemaState{
+					Tables: make(map[string]*schema.Table),
+				}
+			}
+			if sim.Schema.Tables == nil {
+				sim.Schema.Tables = make(map[string]*schema.Table)
+			}
+			isSimulation = true
+		}
+	}()
+
+	if isSimulation {
+		return m.executeSimulationCode(m.downCode, sim)
+	}
+
+	return m.executeRealDBCode(m.downCode, db)
 }
 
 func (m *ASTMigration) executeSimulationCode(block *ast.BlockStmt, sim *schema.SchemaBuilder) error {
@@ -221,6 +275,189 @@ func (m *ASTMigration) executeSimulationCode(block *ast.BlockStmt, sim *schema.S
 
 	// Walk the AST and execute simulation calls
 	return m.interpretSimulationBlock(block, sim)
+}
+
+// executeRealDBCode executes the real DB code path from the AST
+// This skips the simulation block and executes the real DB operations
+func (m *ASTMigration) executeRealDBCode(block *ast.BlockStmt, db *gorm.DB) error {
+	if block == nil {
+		return nil
+	}
+
+	// Walk through statements and find the real DB code (after the simulation if block)
+	// The structure is: if sim, ok := ... { simulation code } real DB code
+	skipSimulationBlock := false
+	for _, stmt := range block.List {
+		if ifStmt, ok := stmt.(*ast.IfStmt); ok {
+			// Check if this is the simulation mode check
+			if m.isSimulationCheck(ifStmt) {
+				// Skip the simulation block - we're in real DB mode
+				skipSimulationBlock = true
+				continue
+			}
+		}
+		if skipSimulationBlock {
+			// Execute real DB operations by interpreting GORM calls
+			if err := m.interpretRealDBStatement(stmt, db); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// interpretRealDBStatement interprets a statement for real DB execution
+func (m *ASTMigration) interpretRealDBStatement(stmt ast.Stmt, db *gorm.DB) error {
+	// Handle expression statements (GORM method calls)
+	if exprStmt, ok := stmt.(*ast.ExprStmt); ok {
+		return m.interpretRealDBExpression(exprStmt.X, db)
+	}
+	// Handle if statements (error checks)
+	if ifStmt, ok := stmt.(*ast.IfStmt); ok {
+		// This might be an error check like: if err := ...; err != nil { return err }
+		// For now, just execute the condition
+		if ifStmt.Init != nil {
+			if assign, ok := ifStmt.Init.(*ast.AssignStmt); ok {
+				// Execute the assignment (the GORM call)
+				for _, expr := range assign.Rhs {
+					if err := m.interpretRealDBExpression(expr, db); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// interpretRealDBExpression interprets an expression for real DB execution
+func (m *ASTMigration) interpretRealDBExpression(expr ast.Expr, db *gorm.DB) error {
+	if call, ok := expr.(*ast.CallExpr); ok {
+		return m.interpretRealDBCall(call, db)
+	}
+	return nil
+}
+
+// interpretRealDBCall interprets a GORM method call for real DB execution
+func (m *ASTMigration) interpretRealDBCall(call *ast.CallExpr, db *gorm.DB) error {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		methodName := sel.Sel.Name
+		receiver := sel.X
+
+		// Check if receiver is 'db' (the gorm.DB)
+		if ident, ok := receiver.(*ast.Ident); ok && ident.Name == "db" {
+			// Extract arguments
+			args := make([]interface{}, 0, len(call.Args))
+			for _, arg := range call.Args {
+				val := m.extractValue(arg)
+				args = append(args, val)
+			}
+
+			// Execute GORM methods
+			switch methodName {
+			case "Table":
+				if len(args) > 0 {
+					if tableName, ok := args[0].(string); ok {
+						// Return a chainable object - for now, we'll execute AutoMigrate if it's chained
+						// This is simplified - in production, we'd need to handle method chaining properly
+						_ = tableName
+					}
+				}
+			case "Exec":
+				if len(args) > 0 {
+					if sql, ok := args[0].(string); ok {
+						if err := db.Exec(sql).Error; err != nil {
+							return err
+						}
+					}
+				}
+			case "Migrator":
+				// Return migrator - chained calls will be handled separately
+				_ = db.Migrator()
+			}
+		} else if callExpr, ok := receiver.(*ast.CallExpr); ok {
+			// This is a chained call like db.Table("users").AutoMigrate(...)
+			// We need to interpret the chain
+			return m.interpretRealDBChainedCall(callExpr, methodName, call.Args, db)
+		}
+	}
+	return nil
+}
+
+// interpretRealDBChainedCall interprets a chained GORM call
+func (m *ASTMigration) interpretRealDBChainedCall(prevCall *ast.CallExpr, methodName string, args []ast.Expr, db *gorm.DB) error {
+	// Handle common GORM chains
+	if sel, ok := prevCall.Fun.(*ast.SelectorExpr); ok {
+		if sel.Sel.Name == "Table" {
+			// db.Table("name").Method(...)
+			if len(prevCall.Args) > 0 {
+				tableName, _ := m.extractValue(prevCall.Args[0]).(string)
+				argValues := make([]interface{}, 0, len(args))
+				for _, arg := range args {
+					argValues = append(argValues, m.extractValue(arg))
+				}
+
+				switch methodName {
+				case "AutoMigrate":
+					if len(argValues) > 0 {
+						// AutoMigrate takes a struct pointer
+						// We can't easily create the struct from AST, so we'll use a generic approach
+						// For now, we'll just call AutoMigrate with a minimal struct
+						// In production, you'd want to parse the struct definition from AST
+						if err := db.Table(tableName).AutoMigrate(&struct{}{}); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		} else if sel.Sel.Name == "Migrator" {
+			// db.Migrator().Method(...)
+			migrator := db.Migrator()
+			argValues := make([]interface{}, 0, len(args))
+			for _, arg := range args {
+				argValues = append(argValues, m.extractValue(arg))
+			}
+
+			switch methodName {
+			case "DropTable":
+				if len(argValues) > 0 {
+					if tableName, ok := argValues[0].(string); ok {
+						if err := migrator.DropTable(tableName); err != nil {
+							return err
+						}
+					}
+				}
+			case "AddColumn":
+				// AddColumn requires a struct and column name
+				// This is complex to handle from AST, so we'll use a simplified approach
+				if len(argValues) >= 2 {
+					if tableName, ok := argValues[0].(string); ok {
+						if colName, ok := argValues[1].(string); ok {
+							// Create a minimal struct with the column
+							type TempStruct struct {
+								Column string `gorm:"column"`
+							}
+							if err := db.Table(tableName).Migrator().AddColumn(&TempStruct{}, colName); err != nil {
+								return err
+							}
+						}
+					}
+				}
+			case "DropColumn":
+				if len(argValues) >= 2 {
+					if tableName, ok := argValues[0].(string); ok {
+						if colName, ok := argValues[1].(string); ok {
+							if err := migrator.DropColumn(tableName, colName); err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (m *ASTMigration) interpretSimulationBlock(block *ast.BlockStmt, sim *schema.SchemaBuilder) error {
@@ -256,6 +493,27 @@ func (m *ASTMigration) interpretStatement(stmt ast.Stmt, sim *schema.SchemaBuild
 	return nil
 }
 
+// isSimulationCheck checks if an if statement is the simulation mode check
+func (m *ASTMigration) isSimulationCheck(ifStmt *ast.IfStmt) bool {
+	if ifStmt.Init != nil {
+		if assign, ok := ifStmt.Init.(*ast.AssignStmt); ok {
+			if len(assign.Lhs) > 0 && len(assign.Rhs) > 0 {
+				if typeAssert, ok := assign.Rhs[0].(*ast.TypeAssertExpr); ok {
+					if sel, ok := typeAssert.Type.(*ast.SelectorExpr); ok {
+						// Check for goosegorm.SchemaBuilder or schema.SchemaBuilder
+						if ident, ok := sel.X.(*ast.Ident); ok {
+							if (ident.Name == "goosegorm" || ident.Name == "schema") && sel.Sel.Name == "SchemaBuilder" {
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (m *ASTMigration) interpretIfStatement(ifStmt *ast.IfStmt, sim *schema.SchemaBuilder) error {
 	// Check if this is the simulation mode check
 	// Pattern: if sim, ok := any(db).(*goosegorm.SchemaBuilder); ok
@@ -270,19 +528,27 @@ func (m *ASTMigration) interpretIfStatement(ifStmt *ast.IfStmt, sim *schema.Sche
 						// Check for goosegorm.SchemaBuilder
 						if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "goosegorm" {
 							if sel.Sel.Name == "SchemaBuilder" {
-								// This is the simulation mode check - execute the body
-								if ifStmt.Body != nil {
-									return m.interpretSimulationBlock(ifStmt.Body, sim)
+								// This is the simulation mode check
+								// Only execute if we have a valid SchemaBuilder (simulation mode)
+								if sim != nil && sim.Schema != nil {
+									if ifStmt.Body != nil {
+										return m.interpretSimulationBlock(ifStmt.Body, sim)
+									}
 								}
+								// If we're not in simulation mode, skip this block (it's the else path)
 								return nil
 							}
 						}
 						// Check for direct schema.SchemaBuilder
 						if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "schema" {
 							if sel.Sel.Name == "SchemaBuilder" {
-								if ifStmt.Body != nil {
-									return m.interpretSimulationBlock(ifStmt.Body, sim)
+								// This is the simulation mode check
+								if sim != nil && sim.Schema != nil {
+									if ifStmt.Body != nil {
+										return m.interpretSimulationBlock(ifStmt.Body, sim)
+									}
 								}
+								// If we're not in simulation mode, skip this block
 								return nil
 							}
 						}

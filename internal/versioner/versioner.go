@@ -9,9 +9,9 @@ import (
 
 // MigrationRecord represents a migration record in the database
 type MigrationRecord struct {
-	Version   string    `gorm:"primaryKey;column:version"`
-	Name      string    `gorm:"column:name"`
-	AppliedAt time.Time `gorm:"column:applied_at"`
+	Version   string    `gorm:"primaryKey;column:version;size:255"`
+	Name      string    `gorm:"column:name;size:255"`
+	AppliedAt time.Time `gorm:"column:applied_at;autoCreateTime"`
 }
 
 // TableName returns the table name for the migration record
@@ -35,25 +35,17 @@ func NewVersioner(db *gorm.DB, tableName string) *Versioner {
 
 // Initialize creates the migration tracking table if it doesn't exist
 func (v *Versioner) Initialize() error {
-	// Always try to create the table (IF NOT EXISTS makes it safe)
-	// This ensures the table exists regardless of whether it was created before
-	createSQL := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			version VARCHAR(255) PRIMARY KEY,
-			name VARCHAR(255),
-			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)
-	`, v.table)
-
-	if err := v.db.Exec(createSQL).Error; err != nil {
+	// Use GORM's AutoMigrate to create the table - this is database-agnostic
+	// GORM will handle the appropriate SQL syntax for the chosen database
+	record := MigrationRecord{}
+	// Set the table name dynamically
+	if err := v.db.Table(v.table).AutoMigrate(&record); err != nil {
 		return fmt.Errorf("failed to create migration table: %w", err)
 	}
 
 	// Verify table exists by trying to query it
 	var count int64
 	if err := v.db.Table(v.table).Limit(1).Count(&count).Error; err != nil {
-		// If query still fails, the table might not have been created
-		// Try creating again with a simpler approach
 		return fmt.Errorf("failed to verify migration table exists: %w", err)
 	}
 
