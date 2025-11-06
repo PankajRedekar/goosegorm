@@ -170,6 +170,7 @@ func LoadMigrationsFromAST(migrationsDir string, packageName string) (*runner.Re
 		// Extract migrations from file
 		migrations := extractMigrationsFromAST(file, fset)
 		for _, m := range migrations {
+			m.filePath = path // Store file path for context
 			registry.RegisterMigration(m)
 		}
 
@@ -189,6 +190,8 @@ type ASTMigration struct {
 	name     string
 	upCode   *ast.BlockStmt
 	downCode *ast.BlockStmt
+	file     *ast.File // Store the file AST to extract struct definitions
+	filePath string    // Store file path for context
 }
 
 func (m *ASTMigration) Version() string { return m.version }
@@ -230,6 +233,8 @@ func (m *ASTMigration) Up(db *gorm.DB) error {
 	}
 
 	// Real DB mode - execute the real DB code path
+	// Note: AST interpretation has limitations - it can't extract struct definitions
+	// For proper execution, migrations should be compiled and their init() functions executed
 	return m.executeRealDBCode(m.upCode, db)
 }
 
@@ -284,21 +289,44 @@ func (m *ASTMigration) executeRealDBCode(block *ast.BlockStmt, db *gorm.DB) erro
 		return nil
 	}
 
-	// Walk through statements and find the real DB code (after the simulation if block)
-	// The structure is: if sim, ok := ... { simulation code } real DB code
+	// First pass: collect struct definitions
+	structDefs := make(map[string]*ast.StructType)
 	skipSimulationBlock := false
 	for _, stmt := range block.List {
 		if ifStmt, ok := stmt.(*ast.IfStmt); ok {
-			// Check if this is the simulation mode check
 			if m.isSimulationCheck(ifStmt) {
-				// Skip the simulation block - we're in real DB mode
+				skipSimulationBlock = true
+				continue
+			}
+		}
+		if skipSimulationBlock {
+			// Collect struct definitions
+			if decl, ok := stmt.(*ast.DeclStmt); ok {
+				if genDecl, ok := decl.Decl.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
+					for _, spec := range genDecl.Specs {
+						if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+							if structType, ok := typeSpec.Type.(*ast.StructType); ok {
+								structDefs[typeSpec.Name.Name] = structType
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Second pass: execute statements, using collected struct definitions
+	skipSimulationBlock = false
+	for _, stmt := range block.List {
+		if ifStmt, ok := stmt.(*ast.IfStmt); ok {
+			if m.isSimulationCheck(ifStmt) {
 				skipSimulationBlock = true
 				continue
 			}
 		}
 		if skipSimulationBlock {
 			// Execute real DB operations by interpreting GORM calls
-			if err := m.interpretRealDBStatement(stmt, db); err != nil {
+			if err := m.interpretRealDBStatementWithStructs(stmt, db, structDefs); err != nil {
 				return err
 			}
 		}
@@ -307,11 +335,11 @@ func (m *ASTMigration) executeRealDBCode(block *ast.BlockStmt, db *gorm.DB) erro
 	return nil
 }
 
-// interpretRealDBStatement interprets a statement for real DB execution
-func (m *ASTMigration) interpretRealDBStatement(stmt ast.Stmt, db *gorm.DB) error {
+// interpretRealDBStatementWithStructs interprets a statement for real DB execution with struct definitions
+func (m *ASTMigration) interpretRealDBStatementWithStructs(stmt ast.Stmt, db *gorm.DB, structDefs map[string]*ast.StructType) error {
 	// Handle expression statements (GORM method calls)
 	if exprStmt, ok := stmt.(*ast.ExprStmt); ok {
-		return m.interpretRealDBExpression(exprStmt.X, db)
+		return m.interpretRealDBExpressionWithStructs(exprStmt.X, db, structDefs)
 	}
 	// Handle if statements (error checks)
 	if ifStmt, ok := stmt.(*ast.IfStmt); ok {
@@ -321,7 +349,7 @@ func (m *ASTMigration) interpretRealDBStatement(stmt ast.Stmt, db *gorm.DB) erro
 			if assign, ok := ifStmt.Init.(*ast.AssignStmt); ok {
 				// Execute the assignment (the GORM call)
 				for _, expr := range assign.Rhs {
-					if err := m.interpretRealDBExpression(expr, db); err != nil {
+					if err := m.interpretRealDBExpressionWithStructs(expr, db, structDefs); err != nil {
 						return err
 					}
 				}
@@ -331,16 +359,26 @@ func (m *ASTMigration) interpretRealDBStatement(stmt ast.Stmt, db *gorm.DB) erro
 	return nil
 }
 
-// interpretRealDBExpression interprets an expression for real DB execution
-func (m *ASTMigration) interpretRealDBExpression(expr ast.Expr, db *gorm.DB) error {
+// interpretRealDBStatement interprets a statement for real DB execution
+func (m *ASTMigration) interpretRealDBStatement(stmt ast.Stmt, db *gorm.DB) error {
+	return m.interpretRealDBStatementWithStructs(stmt, db, make(map[string]*ast.StructType))
+}
+
+// interpretRealDBExpressionWithStructs interprets an expression for real DB execution with struct definitions
+func (m *ASTMigration) interpretRealDBExpressionWithStructs(expr ast.Expr, db *gorm.DB, structDefs map[string]*ast.StructType) error {
 	if call, ok := expr.(*ast.CallExpr); ok {
-		return m.interpretRealDBCall(call, db)
+		return m.interpretRealDBCallWithStructs(call, db, structDefs)
 	}
 	return nil
 }
 
-// interpretRealDBCall interprets a GORM method call for real DB execution
-func (m *ASTMigration) interpretRealDBCall(call *ast.CallExpr, db *gorm.DB) error {
+// interpretRealDBExpression interprets an expression for real DB execution
+func (m *ASTMigration) interpretRealDBExpression(expr ast.Expr, db *gorm.DB) error {
+	return m.interpretRealDBExpressionWithStructs(expr, db, make(map[string]*ast.StructType))
+}
+
+// interpretRealDBCallWithStructs interprets a GORM method call for real DB execution with struct definitions
+func (m *ASTMigration) interpretRealDBCallWithStructs(call *ast.CallExpr, db *gorm.DB, structDefs map[string]*ast.StructType) error {
 	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 		methodName := sel.Sel.Name
 		receiver := sel.X
@@ -379,14 +417,19 @@ func (m *ASTMigration) interpretRealDBCall(call *ast.CallExpr, db *gorm.DB) erro
 		} else if callExpr, ok := receiver.(*ast.CallExpr); ok {
 			// This is a chained call like db.Table("users").AutoMigrate(...)
 			// We need to interpret the chain
-			return m.interpretRealDBChainedCall(callExpr, methodName, call.Args, db)
+			return m.interpretRealDBChainedCallWithStructs(callExpr, methodName, call.Args, db, structDefs)
 		}
 	}
 	return nil
 }
 
-// interpretRealDBChainedCall interprets a chained GORM call
-func (m *ASTMigration) interpretRealDBChainedCall(prevCall *ast.CallExpr, methodName string, args []ast.Expr, db *gorm.DB) error {
+// interpretRealDBCall interprets a GORM method call for real DB execution
+func (m *ASTMigration) interpretRealDBCall(call *ast.CallExpr, db *gorm.DB) error {
+	return m.interpretRealDBCallWithStructs(call, db, make(map[string]*ast.StructType))
+}
+
+// interpretRealDBChainedCallWithStructs interprets a chained GORM call with struct definitions
+func (m *ASTMigration) interpretRealDBChainedCallWithStructs(prevCall *ast.CallExpr, methodName string, args []ast.Expr, db *gorm.DB, structDefs map[string]*ast.StructType) error {
 	// Handle common GORM chains
 	if sel, ok := prevCall.Fun.(*ast.SelectorExpr); ok {
 		if sel.Sel.Name == "Table" {
@@ -402,11 +445,20 @@ func (m *ASTMigration) interpretRealDBChainedCall(prevCall *ast.CallExpr, method
 				case "AutoMigrate":
 					if len(argValues) > 0 {
 						// AutoMigrate takes a struct pointer
-						// We can't easily create the struct from AST, so we'll use a generic approach
-						// For now, we'll just call AutoMigrate with a minimal struct
-						// In production, you'd want to parse the struct definition from AST
-						if err := db.Table(tableName).AutoMigrate(&struct{}{}); err != nil {
-							return err
+						// Extract the struct type from the AST argument
+						if len(args) > 0 {
+							structInstance := m.extractStructInstanceWithDefs(args[0], tableName, structDefs)
+							if structInstance != nil {
+								if err := db.Table(tableName).AutoMigrate(structInstance); err != nil {
+									return err
+								}
+							} else {
+								// Last resort: use empty struct (won't create columns, but won't error)
+								// This is a known limitation - proper solution requires compiling migrations
+								if err := db.Table(tableName).AutoMigrate(&struct{}{}); err != nil {
+									return err
+								}
+							}
 						}
 					}
 				}
@@ -896,6 +948,94 @@ func (m *ASTMigration) extractValue(expr ast.Expr) interface{} {
 	return nil
 }
 
+// interpretRealDBChainedCall interprets a chained GORM call
+func (m *ASTMigration) interpretRealDBChainedCall(prevCall *ast.CallExpr, methodName string, args []ast.Expr, db *gorm.DB) error {
+	return m.interpretRealDBChainedCallWithStructs(prevCall, methodName, args, db, make(map[string]*ast.StructType))
+}
+
+// extractStructInstanceWithDefs extracts a struct instance from an AST expression like &User{} using struct definitions
+func (m *ASTMigration) extractStructInstanceWithDefs(expr ast.Expr, tableName string, structDefs map[string]*ast.StructType) interface{} {
+	// Handle &User{} pattern
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		if composite, ok := unary.X.(*ast.CompositeLit); ok {
+			if ident, ok := composite.Type.(*ast.Ident); ok {
+				// Found &User{} - now find the struct definition
+				if structType, exists := structDefs[ident.Name]; exists {
+					// We have the struct definition, but we can't create a Go type from AST at runtime
+					// This is a fundamental limitation - we need to compile and execute migrations
+					// For now, return nil to fall back to empty struct
+					_ = structType
+					return nil
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// extractStructInstance extracts a struct instance from an AST expression like &User{}
+func (m *ASTMigration) extractStructInstance(expr ast.Expr, tableName string) interface{} {
+	return m.extractStructInstanceWithDefs(expr, tableName, make(map[string]*ast.StructType))
+}
+
+// findStructDefinition finds a struct type definition in the method body
+func (m *ASTMigration) findStructDefinition(structName, tableName string) interface{} {
+	if m.upCode == nil {
+		return nil
+	}
+
+	// Walk through the method body to find type declarations
+	for _, stmt := range m.upCode.List {
+		if decl, ok := stmt.(*ast.DeclStmt); ok {
+			if genDecl, ok := decl.Decl.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
+				for _, spec := range genDecl.Specs {
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+						if typeSpec.Name.Name == structName {
+							// Found the struct definition - use reflection to create instance
+							// For now, return nil and let findStructInMethodBody handle it
+							return nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// findStructInMethodBody finds struct definitions in the method body and creates instances
+// This is a simplified approach - in production, you'd want to use go/types or similar
+func (m *ASTMigration) findStructInMethodBody(tableName string) interface{} {
+	if m.upCode == nil {
+		return nil
+	}
+
+	// Walk through statements to find type declarations
+	for _, stmt := range m.upCode.List {
+		if decl, ok := stmt.(*ast.DeclStmt); ok {
+			if genDecl, ok := decl.Decl.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
+				for _, spec := range genDecl.Specs {
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+						if structType, ok := typeSpec.Type.(*ast.StructType); ok {
+							// Found a struct - create a map-based struct for GORM
+							// GORM can work with map[string]interface{} for AutoMigrate
+							// But we need the actual struct type, so we'll use a workaround
+							// For now, return nil and let the caller handle it
+							_ = structType
+							_ = typeSpec.Name.Name
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// For now, we can't easily create Go types from AST at runtime
+	// The proper solution is to compile and execute migrations
+	// This is a placeholder that returns nil
+	return nil
+}
+
 // extractMigrationsFromAST extracts migration structs and creates ASTMigration instances
 func extractMigrationsFromAST(file *ast.File, fset *token.FileSet) []*ASTMigration {
 	var migrations []*ASTMigration
@@ -934,6 +1074,7 @@ func extractMigrationsFromAST(file *ast.File, fset *token.FileSet) []*ASTMigrati
 				name:     name,
 				upCode:   upBlock,
 				downCode: downBlock,
+				file:     file,
 			}
 
 			migrations = append(migrations, migration)

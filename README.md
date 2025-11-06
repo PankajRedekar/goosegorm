@@ -62,13 +62,17 @@ go run github.com/pankajredekar/goosegorm/cmd/goosegorm
 ## Configuration (goosegorm.yml)
 
 ```yaml
-database_url: postgres://user:pass@localhost:5432/myapp?sslmode=disable
+database_url: sqlite://:memory:  # or postgres://user:pass@localhost:5432/myapp?sslmode=disable
 models_dir: ./models
 migrations_dir: ./migrations
 package_name: migrations
 migration_table: _goosegorm_migrations
 ignore_models: []
 ```
+
+**Supported databases:**
+- SQLite: `sqlite://:memory:` (in-memory) or `sqlite://./db.sqlite` (file)
+- PostgreSQL: `postgres://user:pass@localhost:5432/myapp?sslmode=disable`
 
 ## Model-Level Control
 
@@ -128,6 +132,19 @@ func init() {
 - `goosegorm migrate` - Apply pending migrations
 - `goosegorm rollback [n]` - Rollback last N migrations
 - `goosegorm show` - Show migration status
+
+## Examples
+
+The repository includes a complete example in the `examples/` folder:
+
+- **`examples/models/user.go`** - Example User model with GORM tags, indexes, and soft deletes
+- **`examples/migrations/`** - Example migration files showing:
+  - Creating tables with columns and options
+  - Adding indexes (unique and regular)
+  - Adding columns to existing tables
+- **`examples/goosegorm.yml.example`** - Example configuration file
+
+You can explore these examples to see how migrations are structured and how the dual execution mode (simulation vs real DB) works.
 
 ## License
 
