@@ -393,9 +393,6 @@ func generateVersion() string {
 	if currentSecond != lastSecond {
 		versionCounter = 0
 		lastSecond = currentSecond
-	} else {
-		// Same second, increment counter
-		versionCounter++
 	}
 
 	// Format: YYYYMMDDHHMMSS + 4-digit sequence (0001-9999)
@@ -404,7 +401,7 @@ func generateVersion() string {
 		now.Year(), now.Month(), now.Day(),
 		now.Hour(), now.Minute(), now.Second())
 
-	// Always add sequence number (starts at 0001)
+	// Increment counter and return (starts at 0001 for first migration)
 	versionCounter++
 	return fmt.Sprintf("%s%04d", baseVersion, versionCounter)
 }
