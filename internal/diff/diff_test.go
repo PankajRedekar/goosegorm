@@ -226,6 +226,164 @@ func TestCompareSchema_IgnoreUnmanagedModels(t *testing.T) {
 	}
 }
 
+func TestCompareSchema_AddIndex(t *testing.T) {
+	// Simulated schema has no indexes
+	simulated := schema.NewSchemaBuilder()
+	simulated.CreateTable("user").
+		AddColumnWithOptions("id", "bigint", false, true, false).
+		AddColumnWithOptions("email", "string", false, false, false)
+
+	// Model has an index on email
+	models := []modelreflect.ParsedModel{
+		{
+			Name:    "User",
+			Managed: true,
+			Fields: []modelreflect.Field{
+				{
+					Name:    "ID",
+					Type:    "uint",
+					GormTag: "primaryKey",
+					Indexes: []modelreflect.IndexInfo{},
+				},
+				{
+					Name:    "Email",
+					Type:    "string",
+					GormTag: "",
+					Indexes: []modelreflect.IndexInfo{
+						{Name: "idx_email", Unique: false, Priority: 0},
+					},
+				},
+			},
+		},
+	}
+
+	diffs, err := CompareSchema(simulated.Schema, models)
+	if err != nil {
+		t.Fatalf("CompareSchema failed: %v", err)
+	}
+
+	// Should have one add_index diff
+	addIndexDiffs := 0
+	for _, d := range diffs {
+		if d.Type == "add_index" && d.Index != nil && d.Index.Name == "idx_email" {
+			addIndexDiffs++
+		}
+	}
+
+	if addIndexDiffs == 0 {
+		t.Errorf("Expected at least one add_index diff for idx_email")
+	}
+}
+
+func TestCompareSchema_DropIndex(t *testing.T) {
+	// Simulated schema has an index
+	simulated := schema.NewSchemaBuilder()
+	simulated.CreateTable("user").
+		AddColumnWithOptions("id", "bigint", false, true, false).
+		AddColumnWithOptions("email", "string", false, false, false).
+		AddIndex("idx_email")
+
+	// Model has no indexes
+	models := []modelreflect.ParsedModel{
+		{
+			Name:    "User",
+			Managed: true,
+			Fields: []modelreflect.Field{
+				{
+					Name:    "ID",
+					Type:    "uint",
+					GormTag: "primaryKey",
+					Indexes: []modelreflect.IndexInfo{},
+				},
+				{
+					Name:    "Email",
+					Type:    "string",
+					GormTag: "",
+					Indexes: []modelreflect.IndexInfo{},
+				},
+			},
+		},
+	}
+
+	diffs, err := CompareSchema(simulated.Schema, models)
+	if err != nil {
+		t.Fatalf("CompareSchema failed: %v", err)
+	}
+
+	// Should have one drop_index diff
+	dropIndexDiffs := 0
+	for _, d := range diffs {
+		if d.Type == "drop_index" && d.Index != nil && d.Index.Name == "idx_email" {
+			dropIndexDiffs++
+		}
+	}
+
+	if dropIndexDiffs == 0 {
+		t.Errorf("Expected at least one drop_index diff for idx_email")
+	}
+}
+
+func TestCompareSchema_CompositeIndex(t *testing.T) {
+	// Simulated schema has no indexes
+	simulated := schema.NewSchemaBuilder()
+	simulated.CreateTable("user").
+		AddColumnWithOptions("id", "bigint", false, true, false).
+		AddColumnWithOptions("name", "string", false, false, false).
+		AddColumnWithOptions("email", "string", false, false, false)
+
+	// Model has a composite index on name and email
+	models := []modelreflect.ParsedModel{
+		{
+			Name:    "User",
+			Managed: true,
+			Fields: []modelreflect.Field{
+				{
+					Name:    "ID",
+					Type:    "uint",
+					GormTag: "primaryKey",
+					Indexes: []modelreflect.IndexInfo{},
+				},
+				{
+					Name:    "Name",
+					Type:    "string",
+					GormTag: "",
+					Indexes: []modelreflect.IndexInfo{
+						{Name: "idx_name_email", Unique: false, Priority: 0},
+					},
+				},
+				{
+					Name:    "Email",
+					Type:    "string",
+					GormTag: "",
+					Indexes: []modelreflect.IndexInfo{
+						{Name: "idx_name_email", Unique: false, Priority: 0},
+					},
+				},
+			},
+		},
+	}
+
+	diffs, err := CompareSchema(simulated.Schema, models)
+	if err != nil {
+		t.Fatalf("CompareSchema failed: %v", err)
+	}
+
+	// Should have one add_index diff with multiple fields
+	addIndexDiffs := 0
+	for _, d := range diffs {
+		if d.Type == "add_index" && d.Index != nil && d.Index.Name == "idx_name_email" {
+			addIndexDiffs++
+			if len(d.Index.Fields) != 2 {
+				t.Errorf("Expected composite index with 2 fields, got %d", len(d.Index.Fields))
+			}
+		}
+	}
+
+	if addIndexDiffs == 0 {
+		t.Errorf("Expected at least one add_index diff for idx_name_email")
+	}
+}
+
 func TestMapGoTypeToSQLType(t *testing.T) {
 	tests := []struct {
 		goType   string

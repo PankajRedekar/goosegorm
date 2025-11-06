@@ -185,6 +185,87 @@ func TestToSnakeCase_IDHandling(t *testing.T) {
 	}
 }
 
+func TestParseIndexesFromGormTag(t *testing.T) {
+	tests := []struct {
+		name      string
+		gormTag   string
+		fieldName string
+		expected  []IndexInfo
+	}{
+		{
+			name:      "simple index",
+			gormTag:   "index:idx_email",
+			fieldName: "Email",
+			expected: []IndexInfo{
+				{Name: "idx_email", Unique: false, Priority: 0},
+			},
+		},
+		{
+			name:      "unique index",
+			gormTag:   "index:idx_email,unique",
+			fieldName: "Email",
+			expected: []IndexInfo{
+				{Name: "idx_email", Unique: true, Priority: 0},
+			},
+		},
+		{
+			name:      "named unique index",
+			gormTag:   "uniqueIndex:idx_email_unique",
+			fieldName: "Email",
+			expected: []IndexInfo{
+				{Name: "idx_email_unique", Unique: true, Priority: 0},
+			},
+		},
+		{
+			name:      "unnamed unique index",
+			gormTag:   "uniqueIndex",
+			fieldName: "Email",
+			expected: []IndexInfo{
+				{Name: "idx_email", Unique: true, Priority: 0},
+			},
+		},
+		{
+			name:      "multiple indexes",
+			gormTag:   "index:idx_email;index:idx_user_email",
+			fieldName: "Email",
+			expected: []IndexInfo{
+				{Name: "idx_email", Unique: false, Priority: 0},
+				{Name: "idx_user_email", Unique: false, Priority: 0},
+			},
+		},
+		{
+			name:      "no index",
+			gormTag:   "primaryKey",
+			fieldName: "ID",
+			expected:  []IndexInfo{},
+		},
+		{
+			name:      "empty tag",
+			gormTag:   "",
+			fieldName: "Name",
+			expected:  []IndexInfo{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseIndexesFromGormTag(tt.gormTag, tt.fieldName)
+			if len(result) != len(tt.expected) {
+				t.Errorf("Expected %d indexes, got %d", len(tt.expected), len(result))
+				return
+			}
+			for i, idx := range result {
+				if idx.Name != tt.expected[i].Name {
+					t.Errorf("Index %d: expected name %s, got %s", i, tt.expected[i].Name, idx.Name)
+				}
+				if idx.Unique != tt.expected[i].Unique {
+					t.Errorf("Index %d: expected unique %v, got %v", i, tt.expected[i].Unique, idx.Unique)
+				}
+			}
+		})
+	}
+}
+
 func TestToSnakeCase_AllUppercase(t *testing.T) {
 	tests := []struct {
 		input    string

@@ -142,6 +142,17 @@ func (t *TableBuilder) AddIndex(name string) *TableBuilder {
 	return t
 }
 
+// DropIndex removes an index from the table
+func (t *TableBuilder) DropIndex(name string) *TableBuilder {
+	for i, idxName := range t.table.Indexes {
+		if idxName == name {
+			t.table.Indexes = append(t.table.Indexes[:i], t.table.Indexes[i+1:]...)
+			break
+		}
+	}
+	return t
+}
+
 // RenameColumn renames a column
 func (t *TableBuilder) RenameColumn(oldName, newName string) *TableBuilder {
 	if col, exists := t.table.Columns[oldName]; exists {

@@ -184,6 +184,62 @@ func TestAddIndex(t *testing.T) {
 	}
 }
 
+func TestDropIndex(t *testing.T) {
+	builder := NewSchemaBuilder()
+	builder.CreateTable("users").
+		AddIndex("idx_email").
+		AddIndex("idx_name").
+		DropIndex("idx_email")
+
+	table := builder.Schema.Tables["users"]
+	if len(table.Indexes) != 1 {
+		t.Errorf("Expected 1 index, got %d", len(table.Indexes))
+	}
+	if table.Indexes[0] != "idx_name" {
+		t.Errorf("Expected index 'idx_name', got '%s'", table.Indexes[0])
+	}
+}
+
+func TestDropIndex_NonExistent(t *testing.T) {
+	builder := NewSchemaBuilder()
+	builder.CreateTable("users").
+		AddIndex("idx_email").
+		DropIndex("idx_nonexistent")
+
+	table := builder.Schema.Tables["users"]
+	if len(table.Indexes) != 1 {
+		t.Errorf("Expected 1 index, got %d", len(table.Indexes))
+	}
+	if table.Indexes[0] != "idx_email" {
+		t.Errorf("Expected index 'idx_email', got '%s'", table.Indexes[0])
+	}
+}
+
+func TestMultipleIndexes(t *testing.T) {
+	builder := NewSchemaBuilder()
+	builder.CreateTable("users").
+		AddIndex("idx_email").
+		AddIndex("idx_name").
+		AddIndex("idx_created_at")
+
+	table := builder.Schema.Tables["users"]
+	if len(table.Indexes) != 3 {
+		t.Errorf("Expected 3 indexes, got %d", len(table.Indexes))
+	}
+
+	expectedIndexes := map[string]bool{
+		"idx_email":     true,
+		"idx_name":       true,
+		"idx_created_at": true,
+	}
+
+	for _, idx := range table.Indexes {
+		if !expectedIndexes[idx] {
+			t.Errorf("Unexpected index: %s", idx)
+		}
+	}
+}
+
 func TestRenameColumn(t *testing.T) {
 	builder := NewSchemaBuilder()
 	builder.CreateTable("users").

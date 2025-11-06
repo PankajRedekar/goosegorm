@@ -24,6 +24,14 @@ type Field struct {
 	Type     string
 	GormTag  string
 	GooseTag string
+	Indexes  []IndexInfo // Named indexes from GORM tags
+}
+
+// IndexInfo represents index information from GORM tags
+type IndexInfo struct {
+	Name     string
+	Unique   bool
+	Priority int
 }
 
 // ParseModelsFromDir parses all Go files in the directory and extracts model structs
@@ -136,12 +144,16 @@ func parseFields(st *ast.StructType) []Field {
 
 		gormTag := ""
 		gooseTag := ""
+		var indexes []IndexInfo
 
 		if field.Tag != nil {
 			tagValue := strings.Trim(field.Tag.Value, "`")
 			tags := parseTag(tagValue)
 			gormTag = tags["gorm"]
 			gooseTag = tags["goosegorm"]
+
+			// Parse indexes from GORM tag
+			indexes = parseIndexesFromGormTag(gormTag, fieldName)
 		}
 
 		fields = append(fields, Field{
@@ -149,6 +161,7 @@ func parseFields(st *ast.StructType) []Field {
 			Type:     fieldType,
 			GormTag:  gormTag,
 			GooseTag: gooseTag,
+			Indexes:  indexes,
 		})
 	}
 
@@ -184,6 +197,65 @@ func parseTag(tag string) map[string]string {
 		}
 	}
 	return result
+}
+
+// parseIndexesFromGormTag parses index information from GORM tag
+// Supports: index:idx_name, index:idx_name,unique, index:idx_name,priority:1
+func parseIndexesFromGormTag(gormTag, fieldName string) []IndexInfo {
+	var indexes []IndexInfo
+
+	if gormTag == "" {
+		return indexes
+	}
+
+	// Look for index: patterns
+	parts := strings.Split(gormTag, ";")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "index:") {
+			// Extract index name and options
+			indexSpec := strings.TrimPrefix(part, "index:")
+			options := strings.Split(indexSpec, ",")
+
+			indexName := options[0]
+			unique := false
+			priority := 0
+
+			for i := 1; i < len(options); i++ {
+				opt := strings.TrimSpace(options[i])
+				if opt == "unique" {
+					unique = true
+				} else if strings.HasPrefix(opt, "priority:") {
+					// Parse priority if needed
+					priority = 1 // Default priority
+				}
+			}
+
+			indexes = append(indexes, IndexInfo{
+				Name:     indexName,
+				Unique:   unique,
+				Priority: priority,
+			})
+		} else if strings.HasPrefix(part, "uniqueIndex:") {
+			// Named unique index
+			indexName := strings.TrimPrefix(part, "uniqueIndex:")
+			indexes = append(indexes, IndexInfo{
+				Name:     indexName,
+				Unique:   true,
+				Priority: 0,
+			})
+		} else if part == "uniqueIndex" {
+			// Unnamed unique index - use default name
+			indexName := "idx_" + toSnakeCase(fieldName)
+			indexes = append(indexes, IndexInfo{
+				Name:     indexName,
+				Unique:   true,
+				Priority: 0,
+			})
+		}
+	}
+
+	return indexes
 }
 
 // GetTableName gets the table name for a model (from GORM tag or default)

@@ -136,6 +136,16 @@ func (g *Generator) generateUpSimulation(diffs []diff.Diff) string {
 		case "modify_column":
 			sb.WriteString(fmt.Sprintf("\t\tsim.AlterTable(\"%s\").ModifyColumn(\"%s\", \"%s\", %v, %v, %v)\n",
 				d.TableName, d.Column.Name, d.Column.Type, d.Column.Null, d.Column.PK, d.Column.Unique))
+		case "add_index":
+			// Add index to simulation
+			if d.Index != nil {
+				sb.WriteString(fmt.Sprintf("\t\tsim.AlterTable(\"%s\").AddIndex(\"%s\")\n", d.TableName, d.Index.Name))
+			}
+		case "drop_index":
+			// Drop index from simulation
+			if d.Index != nil {
+				sb.WriteString(fmt.Sprintf("\t\tsim.AlterTable(\"%s\").DropIndex(\"%s\")\n", d.TableName, d.Index.Name))
+			}
 		}
 	}
 
@@ -166,6 +176,16 @@ func (g *Generator) generateDownSimulation(diffs []diff.Diff) string {
 			// Revert to old type
 			sb.WriteString(fmt.Sprintf("\t\tsim.AlterTable(\"%s\").ModifyColumn(\"%s\", \"%s\", %v, %v, %v)\n",
 				d.TableName, d.Column.Name, d.Column.OldType, d.Column.Null, d.Column.PK, d.Column.Unique))
+		case "add_index":
+			// Reverse: Drop index
+			if d.Index != nil {
+				sb.WriteString(fmt.Sprintf("\t\tsim.AlterTable(\"%s\").DropIndex(\"%s\")\n", d.TableName, d.Index.Name))
+			}
+		case "drop_index":
+			// Reverse: Add index back
+			if d.Index != nil {
+				sb.WriteString(fmt.Sprintf("\t\tsim.AlterTable(\"%s\").AddIndex(\"%s\")\n", d.TableName, d.Index.Name))
+			}
 		}
 	}
 
@@ -225,6 +245,26 @@ func (g *Generator) generateUpRealDB(diffs []diff.Diff) string {
 			sb.WriteString(fmt.Sprintf("\tif err := db.Migrator().DropColumn(\"%s\", \"%s\"); err != nil {\n", d.TableName, fieldName))
 			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
 			sb.WriteString(fmt.Sprintf("\t}\n"))
+		case "add_index":
+			// Create index using raw SQL
+			if d.Index != nil {
+				indexExpr := strings.Join(d.Index.Fields, ", ")
+				uniqueStr := ""
+				if d.Index.Unique {
+					uniqueStr = "UNIQUE "
+				}
+				sb.WriteString(fmt.Sprintf("\t// Create index %s on %s (%s)\n", d.Index.Name, d.TableName, indexExpr))
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, d.TableName, indexExpr))
+				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+			}
+		case "drop_index":
+			// Drop index using raw SQL
+			if d.Index != nil {
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"DROP INDEX IF EXISTS %s\").Error; err != nil {\n", d.Index.Name))
+				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+			}
 		case "modify_column":
 			// Use AutoMigrate with updated struct
 			structName := toPascalCase(d.TableName)
@@ -308,6 +348,25 @@ func (g *Generator) generateDownRealDB(diffs []diff.Diff) string {
 			sb.WriteString(fmt.Sprintf("\tif err := db.Table(\"%s\").AutoMigrate(&%s%s{}); err != nil {\n", d.TableName, structName, fieldName))
 			sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
 			sb.WriteString(fmt.Sprintf("\t}\n"))
+		case "add_index":
+			// Reverse: Drop index
+			if d.Index != nil {
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"DROP INDEX IF EXISTS %s\").Error; err != nil {\n", d.Index.Name))
+				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+			}
+		case "drop_index":
+			// Reverse: Recreate index
+			if d.Index != nil {
+				indexExpr := strings.Join(d.Index.Fields, ", ")
+				uniqueStr := ""
+				if d.Index.Unique {
+					uniqueStr = "UNIQUE "
+				}
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, d.TableName, indexExpr))
+				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
+				sb.WriteString(fmt.Sprintf("\t}\n"))
+			}
 		}
 	}
 

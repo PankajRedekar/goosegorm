@@ -9,10 +9,18 @@ import (
 
 // Diff represents a difference between the schema and models
 type Diff struct {
-	Type      string // "create_table", "drop_table", "add_column", "drop_column", "modify_column"
+	Type      string // "create_table", "drop_table", "add_column", "drop_column", "modify_column", "add_index", "drop_index"
 	TableName string
 	Column    *ColumnDiff
 	Table     *TableDiff
+	Index     *IndexDiff
+}
+
+// IndexDiff represents an index difference
+type IndexDiff struct {
+	Name   string
+	Unique bool
+	Fields []string // For composite indexes
 }
 
 // ColumnDiff represents a column difference
@@ -29,6 +37,7 @@ type ColumnDiff struct {
 type TableDiff struct {
 	Name    string
 	Columns []*ColumnDiff
+	Indexes map[string]*IndexDiff // Index name -> IndexDiff
 }
 
 // CompareSchema compares the simulated schema with the parsed models
@@ -47,10 +56,14 @@ func CompareSchema(simulatedSchema *schema.SchemaState, models []modelreflect.Pa
 				Table:     expectedTable,
 			})
 		} else {
-			// Table exists, check columns
+			// Table exists, check columns and indexes
 			simulatedTable, _ := simulatedSchema.Tables[tableName]
 			columnDiffs := compareColumns(simulatedTable, expectedTable)
 			diffs = append(diffs, columnDiffs...)
+
+			// Compare indexes
+			indexDiffs := compareIndexes(simulatedTable, expectedTable, tableName)
+			diffs = append(diffs, indexDiffs...)
 		}
 	}
 
@@ -69,6 +82,8 @@ func CompareSchema(simulatedSchema *schema.SchemaState, models []modelreflect.Pa
 
 func buildExpectedSchema(models []modelreflect.ParsedModel) map[string]*TableDiff {
 	schema := make(map[string]*TableDiff)
+	// Track indexes by table
+	tableIndexes := make(map[string]map[string]*IndexDiff)
 
 	for _, model := range models {
 		if !model.Managed {
@@ -79,6 +94,11 @@ func buildExpectedSchema(models []modelreflect.ParsedModel) map[string]*TableDif
 		table := &TableDiff{
 			Name:    tableName,
 			Columns: []*ColumnDiff{},
+			Indexes: make(map[string]*IndexDiff),
+		}
+
+		if tableIndexes[tableName] == nil {
+			tableIndexes[tableName] = make(map[string]*IndexDiff)
 		}
 
 		for _, field := range model.Fields {
@@ -91,8 +111,25 @@ func buildExpectedSchema(models []modelreflect.ParsedModel) map[string]*TableDif
 				Unique: isUnique(field.GormTag),
 			}
 			table.Columns = append(table.Columns, col)
+
+			// Process indexes from field
+			for _, idx := range field.Indexes {
+				if existingIdx, exists := tableIndexes[tableName][idx.Name]; exists {
+					// Composite index - add field to existing
+					existingIdx.Fields = append(existingIdx.Fields, toSnakeCase(field.Name))
+				} else {
+					// New index
+					tableIndexes[tableName][idx.Name] = &IndexDiff{
+						Name:   idx.Name,
+						Unique: idx.Unique,
+						Fields: []string{toSnakeCase(field.Name)},
+					}
+				}
+			}
 		}
 
+		// Store indexes in table
+		table.Indexes = tableIndexes[tableName]
 		schema[tableName] = table
 	}
 
@@ -210,6 +247,46 @@ func isPrimaryKey(gormTag string) bool {
 
 func isUnique(gormTag string) bool {
 	return strings.Contains(gormTag, "unique") || strings.Contains(gormTag, "uniqueIndex")
+}
+
+// compareIndexes compares indexes between simulated and expected schema
+func compareIndexes(simulatedTable *schema.Table, expectedTable *TableDiff, tableName string) []Diff {
+	var diffs []Diff
+
+	// Build map of simulated indexes (by name)
+	simulatedIndexMap := make(map[string]bool)
+	for _, idxName := range simulatedTable.Indexes {
+		simulatedIndexMap[idxName] = true
+	}
+
+	// Check for indexes to add (in expected but not in simulated)
+	for idxName, idxDiff := range expectedTable.Indexes {
+		if !simulatedIndexMap[idxName] {
+			diffs = append(diffs, Diff{
+				Type:      "add_index",
+				TableName: tableName,
+				Index:     idxDiff,
+			})
+		}
+	}
+
+	// Check for indexes to drop (in simulated but not in expected)
+	// Note: We only track index names in schema, not full details
+	// So we'll check if any simulated index is missing from expected
+	for idxName := range simulatedIndexMap {
+		if _, exists := expectedTable.Indexes[idxName]; !exists {
+			// We don't have full details of simulated index, so create basic IndexDiff
+			diffs = append(diffs, Diff{
+				Type:      "drop_index",
+				TableName: tableName,
+				Index: &IndexDiff{
+					Name: idxName,
+				},
+			})
+		}
+	}
+
+	return diffs
 }
 
 func toSnakeCase(s string) string {

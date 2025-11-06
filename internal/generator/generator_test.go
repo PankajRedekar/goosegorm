@@ -220,3 +220,168 @@ func TestGenerateMigration_CreatesDirectory(t *testing.T) {
 		t.Fatal("Migrations directory should have been created")
 	}
 }
+
+func TestGenerateMigration_AddIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	gen := NewGenerator(migrationsDir, "migrations")
+
+	diffs := []diff.Diff{
+		{
+			Type:      "add_index",
+			TableName: "users",
+			Index: &diff.IndexDiff{
+				Name:   "idx_email",
+				Unique: false,
+				Fields: []string{"email"},
+			},
+		},
+	}
+
+	filePath, err := gen.GenerateMigration("add_email_index", diffs)
+	if err != nil {
+		t.Fatalf("GenerateMigration failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("Failed to read migration file: %v", err)
+	}
+
+	contentStr := string(content)
+	
+	// Check for index creation in simulation
+	if !strings.Contains(contentStr, "AddIndex(\"idx_email\")") {
+		t.Error("Migration should contain AddIndex for simulation")
+	}
+	
+	// Check for index creation in real DB
+	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_email") {
+		t.Error("Migration should contain CREATE INDEX for real DB")
+	}
+	
+	// Check for index drop in Down method
+	if !strings.Contains(contentStr, "DROP INDEX IF EXISTS idx_email") {
+		t.Error("Migration Down method should contain DROP INDEX")
+	}
+}
+
+func TestGenerateMigration_DropIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	gen := NewGenerator(migrationsDir, "migrations")
+
+	diffs := []diff.Diff{
+		{
+			Type:      "drop_index",
+			TableName: "users",
+			Index: &diff.IndexDiff{
+				Name:   "idx_email",
+				Unique: false,
+				Fields: []string{"email"},
+			},
+		},
+	}
+
+	filePath, err := gen.GenerateMigration("drop_email_index", diffs)
+	if err != nil {
+		t.Fatalf("GenerateMigration failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("Failed to read migration file: %v", err)
+	}
+
+	contentStr := string(content)
+	
+	// Check for index drop in simulation
+	if !strings.Contains(contentStr, "DropIndex(\"idx_email\")") {
+		t.Error("Migration should contain DropIndex for simulation")
+	}
+	
+	// Check for index drop in real DB
+	if !strings.Contains(contentStr, "DROP INDEX IF EXISTS idx_email") {
+		t.Error("Migration should contain DROP INDEX for real DB")
+	}
+	
+	// Check for index recreation in Down method
+	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_email") {
+		t.Error("Migration Down method should contain CREATE INDEX")
+	}
+}
+
+func TestGenerateMigration_UniqueIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	gen := NewGenerator(migrationsDir, "migrations")
+
+	diffs := []diff.Diff{
+		{
+			Type:      "add_index",
+			TableName: "users",
+			Index: &diff.IndexDiff{
+				Name:   "idx_email_unique",
+				Unique: true,
+				Fields: []string{"email"},
+			},
+		},
+	}
+
+	filePath, err := gen.GenerateMigration("add_unique_email_index", diffs)
+	if err != nil {
+		t.Fatalf("GenerateMigration failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("Failed to read migration file: %v", err)
+	}
+
+	contentStr := string(content)
+	
+	// Check for UNIQUE keyword in index creation
+	if !strings.Contains(contentStr, "CREATE UNIQUE INDEX IF NOT EXISTS idx_email_unique") {
+		t.Error("Migration should contain CREATE UNIQUE INDEX for unique indexes")
+	}
+}
+
+func TestGenerateMigration_CompositeIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	gen := NewGenerator(migrationsDir, "migrations")
+
+	diffs := []diff.Diff{
+		{
+			Type:      "add_index",
+			TableName: "users",
+			Index: &diff.IndexDiff{
+				Name:   "idx_name_email",
+				Unique: false,
+				Fields: []string{"name", "email"},
+			},
+		},
+	}
+
+	filePath, err := gen.GenerateMigration("add_composite_index", diffs)
+	if err != nil {
+		t.Fatalf("GenerateMigration failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("Failed to read migration file: %v", err)
+	}
+
+	contentStr := string(content)
+	
+	// Check for composite index with multiple fields
+	if !strings.Contains(contentStr, "name, email") {
+		t.Error("Migration should contain composite index fields")
+	}
+	
+	// Check for index creation
+	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_name_email") {
+		t.Error("Migration should contain CREATE INDEX for composite index")
+	}
+}
