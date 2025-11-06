@@ -13,15 +13,24 @@ Django-style migration framework for GORM — pure Go, no SQL files, no external
 
 ## Installation
 
+Install the GooseGORM CLI tool:
+
 ```bash
-go get github.com/pankajredekar/goosegorm
+go install github.com/pankajredekar/goosegorm/cmd/goosegorm@latest
+```
+
+Make sure `$GOPATH/bin` or `$HOME/go/bin` is in your `PATH` to use the `goosegorm` command.
+
+Alternatively, for development, you can run directly:
+```bash
+go run github.com/pankajredekar/goosegorm/cmd/goosegorm
 ```
 
 ## Quick Start
 
 1. **Initialize a project:**
    ```bash
-   go run ./cmd/goosegorm init
+   goosegorm init
    ```
 
 2. **Create models:**
@@ -38,12 +47,12 @@ go get github.com/pankajredekar/goosegorm
 
 3. **Generate migrations:**
    ```bash
-   go run ./cmd/goosegorm makemigrations
+   goosegorm makemigrations
    ```
 
 4. **Apply migrations:**
    ```bash
-   go run ./cmd/goosegorm migrate
+   goosegorm migrate
    ```
 
 ## Configuration (goosegorm.yml)
