@@ -33,17 +33,30 @@ func NewVersioner(db *gorm.DB, tableName string) *Versioner {
 	}
 }
 
-// Initialize creates the migration tracking table
+// Initialize creates the migration tracking table if it doesn't exist
 func (v *Versioner) Initialize() error {
-	if err := v.db.Exec(fmt.Sprintf(`
+	// Always try to create the table (IF NOT EXISTS makes it safe)
+	// This ensures the table exists regardless of whether it was created before
+	createSQL := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			version VARCHAR(255) PRIMARY KEY,
 			name VARCHAR(255),
 			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
-	`, v.table)).Error; err != nil {
+	`, v.table)
+
+	if err := v.db.Exec(createSQL).Error; err != nil {
 		return fmt.Errorf("failed to create migration table: %w", err)
 	}
+
+	// Verify table exists by trying to query it
+	var count int64
+	if err := v.db.Table(v.table).Limit(1).Count(&count).Error; err != nil {
+		// If query still fails, the table might not have been created
+		// Try creating again with a simpler approach
+		return fmt.Errorf("failed to verify migration table exists: %w", err)
+	}
+
 	return nil
 }
 

@@ -47,9 +47,9 @@ var migrateCmd = &cobra.Command{
 		}
 
 		// Load migrations
-		registry := loadMigrations(cfg.MigrationsDir)
-		if registry == nil {
-			utils.PrintError("Failed to load migrations")
+		registry, err := loadMigrations(cfg.MigrationsDir)
+		if err != nil {
+			utils.PrintError("Failed to load migrations: %v", err)
 			os.Exit(1)
 		}
 

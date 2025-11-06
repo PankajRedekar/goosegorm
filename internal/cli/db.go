@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pankajredekar/goosegorm/internal/config"
+	"github.com/pankajredekar/goosegorm/internal/loader"
 	"github.com/pankajredekar/goosegorm/internal/runner"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -21,11 +23,14 @@ func connectDB(databaseURL string) (*gorm.DB, error) {
 	return nil, fmt.Errorf("unsupported database URL: %s", databaseURL)
 }
 
-// loadMigrations loads migrations from the directory
-// Note: This is a simplified version - in production, you'd need to actually
-// compile and import the migration packages to register them
-func loadMigrations(migrationsDir string) *runner.Registry {
-	registry := runner.NewRegistry()
-	// TODO: Actually load and register migrations from the directory
-	return registry
+// loadMigrations loads migrations from the directory using AST parsing
+func loadMigrations(migrationsDir string) (*runner.Registry, error) {
+	// Get package name from config
+	cfg, err := config.LoadConfig("goosegorm.yml")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Use the loader package to load migrations from AST
+	return loader.LoadMigrationsFromAST(migrationsDir, cfg.PackageName)
 }
