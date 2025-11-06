@@ -3,8 +3,10 @@ package generator
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pankajredekar/goosegorm/internal/diff"
 )
@@ -125,8 +127,9 @@ func TestGenerateMigration_AddColumn(t *testing.T) {
 
 func TestGenerateVersion(t *testing.T) {
 	version := generateVersion()
-	if len(version) != 14 {
-		t.Errorf("Expected version length 14 (YYYYMMDDHHMMSS), got %d", len(version))
+	// Version can be 14 (YYYYMMDDHHMMSS) or 18 (YYYYMMDDHHMMSS + 4-digit sequence)
+	if len(version) != 14 && len(version) != 18 {
+		t.Errorf("Expected version length 14 (YYYYMMDDHHMMSS) or 18 (with sequence), got %d", len(version))
 	}
 
 	// Version should be numeric
@@ -135,6 +138,70 @@ func TestGenerateVersion(t *testing.T) {
 			t.Errorf("Version should contain only digits, got '%s'", version)
 			break
 		}
+	}
+
+	// First 14 characters should be valid timestamp
+	if len(version) >= 14 {
+		baseVersion := version[:14]
+		if len(baseVersion) != 14 {
+			t.Errorf("Base version should be 14 characters, got %d", len(baseVersion))
+		}
+	}
+
+	// If version has sequence, it should be 4 digits
+	if len(version) == 18 {
+		sequence := version[14:]
+		if len(sequence) != 4 {
+			t.Errorf("Sequence should be 4 digits, got %d: %s", len(sequence), sequence)
+		}
+		// Sequence should start from 0001, not 0000
+		if sequence == "0000" {
+			t.Errorf("Sequence should not be 0000, got %s", sequence)
+		}
+	}
+}
+
+func TestGenerateVersion_Sequence(t *testing.T) {
+	// Reset the global counter to test sequence behavior
+	// Note: This test may be flaky if run in parallel, but it's useful for verification
+	versions := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		// Small delay to ensure we're in the same second
+		time.Sleep(10 * time.Millisecond)
+		versions[i] = generateVersion()
+	}
+
+	// All versions should have the same base timestamp (first 14 chars)
+	baseVersion := versions[0][:14]
+	for i, v := range versions {
+		if len(v) < 14 {
+			t.Errorf("Version %d is too short: %s", i, v)
+			continue
+		}
+		if v[:14] != baseVersion {
+			t.Logf("Warning: Version %d has different base timestamp (expected same second): %s", i, v)
+		}
+	}
+
+	// Check that sequences are properly formatted (0001, 0002, etc.)
+	// Note: First version might be 14 chars (no sequence) or 18 chars (with sequence)
+	hasSequence := false
+	for i, v := range versions {
+		if len(v) == 18 {
+			hasSequence = true
+			sequence := v[14:]
+			// Allow some flexibility since counter is global
+			seqNum, err := strconv.Atoi(sequence)
+			if err != nil {
+				t.Errorf("Version %d has invalid sequence: %s", i, sequence)
+			} else if seqNum < 1 || seqNum > 9999 {
+				t.Errorf("Version %d has sequence out of range: %s", i, sequence)
+			}
+		}
+	}
+
+	if !hasSequence {
+		t.Log("No versions with sequence found (all generated in different seconds)")
 	}
 }
 
@@ -249,17 +316,17 @@ func TestGenerateMigration_AddIndex(t *testing.T) {
 	}
 
 	contentStr := string(content)
-	
+
 	// Check for index creation in simulation
 	if !strings.Contains(contentStr, "AddIndex(\"idx_email\")") {
 		t.Error("Migration should contain AddIndex for simulation")
 	}
-	
+
 	// Check for index creation in real DB
 	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_email") {
 		t.Error("Migration should contain CREATE INDEX for real DB")
 	}
-	
+
 	// Check for index drop in Down method
 	if !strings.Contains(contentStr, "DROP INDEX IF EXISTS idx_email") {
 		t.Error("Migration Down method should contain DROP INDEX")
@@ -294,17 +361,17 @@ func TestGenerateMigration_DropIndex(t *testing.T) {
 	}
 
 	contentStr := string(content)
-	
+
 	// Check for index drop in simulation
 	if !strings.Contains(contentStr, "DropIndex(\"idx_email\")") {
 		t.Error("Migration should contain DropIndex for simulation")
 	}
-	
+
 	// Check for index drop in real DB
 	if !strings.Contains(contentStr, "DROP INDEX IF EXISTS idx_email") {
 		t.Error("Migration should contain DROP INDEX for real DB")
 	}
-	
+
 	// Check for index recreation in Down method
 	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_email") {
 		t.Error("Migration Down method should contain CREATE INDEX")
@@ -339,7 +406,7 @@ func TestGenerateMigration_UniqueIndex(t *testing.T) {
 	}
 
 	contentStr := string(content)
-	
+
 	// Check for UNIQUE keyword in index creation
 	if !strings.Contains(contentStr, "CREATE UNIQUE INDEX IF NOT EXISTS idx_email_unique") {
 		t.Error("Migration should contain CREATE UNIQUE INDEX for unique indexes")
@@ -374,12 +441,12 @@ func TestGenerateMigration_CompositeIndex(t *testing.T) {
 	}
 
 	contentStr := string(content)
-	
+
 	// Check for composite index with multiple fields
 	if !strings.Contains(contentStr, "name, email") {
 		t.Error("Migration should contain composite index fields")
 	}
-	
+
 	// Check for index creation
 	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_name_email") {
 		t.Error("Migration should contain CREATE INDEX for composite index")

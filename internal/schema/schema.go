@@ -138,6 +138,12 @@ func (t *TableBuilder) AddConstraint(expr string) *TableBuilder {
 
 // AddIndex adds an index to the table
 func (t *TableBuilder) AddIndex(name string) *TableBuilder {
+	// Check if index already exists to prevent duplicates
+	for _, existingIdx := range t.table.Indexes {
+		if existingIdx == name {
+			return t // Index already exists, no-op
+		}
+	}
 	t.table.Indexes = append(t.table.Indexes, name)
 	return t
 }

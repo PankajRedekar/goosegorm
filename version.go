@@ -1,7 +1,7 @@
 package goosegorm
 
 // Version is the current version of GooseGORM
-const Version = "0.4.0"
+const Version = "0.4.1"
 
 // GetVersion returns the current version of GooseGORM
 func GetVersion() string {

@@ -5,9 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankajredekar/goosegorm/internal/diff"
+)
+
+var (
+	versionCounter int64
+	versionMutex   sync.Mutex
+	lastSecond     int64
 )
 
 // Generator generates migration files from diffs
@@ -376,10 +383,32 @@ func (g *Generator) generateDownRealDB(diffs []diff.Diff) string {
 }
 
 func generateVersion() string {
+	versionMutex.Lock()
+	defer versionMutex.Unlock()
+
 	now := time.Now()
-	return fmt.Sprintf("%04d%02d%02d%02d%02d%02d",
+	currentSecond := now.Unix()
+
+	// If we're in a new second, reset the counter
+	if currentSecond != lastSecond {
+		versionCounter = 0
+		lastSecond = currentSecond
+	} else {
+		// Same second, increment counter
+		versionCounter++
+	}
+
+	// Format: YYYYMMDDHHMMSS + 4-digit sequence (0001-9999)
+	baseVersion := fmt.Sprintf("%04d%02d%02d%02d%02d%02d",
 		now.Year(), now.Month(), now.Day(),
 		now.Hour(), now.Minute(), now.Second())
+
+	// Add sequence number if we're in the same second
+	if versionCounter > 0 {
+		return fmt.Sprintf("%s%04d", baseVersion, versionCounter)
+	}
+
+	return baseVersion
 }
 
 func sanitizeName(name string) string {

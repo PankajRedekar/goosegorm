@@ -351,12 +351,26 @@ func (m *ASTMigration) interpretCall(call *ast.CallExpr, sim *schema.SchemaBuild
 		}
 	}
 
+	// Handle chaining where receiver is a SelectorExpr wrapping a CallExpr
+	// Pattern: sim.AlterTable("user").AddIndex("idx_email")
+	// The receiver is a SelectorExpr where X is a CallExpr
+	if recvSel, ok := receiver.(*ast.SelectorExpr); ok {
+		// Check if X is a CallExpr (the previous method call in the chain)
+		if recvCall, ok := recvSel.X.(*ast.CallExpr); ok {
+			tableBuilder := m.interpretCallForChaining(recvCall, sim)
+			if tableBuilder != nil {
+				// Execute the method (e.g., AddIndex) on the TableBuilder
+				return m.executeTableBuilderMethod(methodName, args, tableBuilder)
+			}
+		}
+	}
+
 	// Handle nested chaining: sim.CreateTable(...).AddColumn(...).AddColumn(...)
 	// The receiver might be a selector expression wrapping a call
+	// Pattern: (sim.AlterTable("user")).AddIndex("idx_email")
+	// The receiver is a SelectorExpr where X is the CallExpr and Sel is the method name
 	if recvSel, ok := receiver.(*ast.SelectorExpr); ok {
-		// This represents a method call in a chain
-		// The X part is the previous call, the Sel is the method name
-		// We need to interpret the X part first
+		// Check if X is a CallExpr (chained call)
 		if recvCall, ok := recvSel.X.(*ast.CallExpr); ok {
 			tableBuilder := m.interpretCallForChaining(recvCall, sim)
 			if tableBuilder != nil {
@@ -366,8 +380,42 @@ func (m *ASTMigration) interpretCall(call *ast.CallExpr, sim *schema.SchemaBuild
 					val := m.extractValue(arg)
 					args = append(args, val)
 				}
-				// Execute the method from the selector
+				// Execute the method from the selector (e.g., AddIndex)
 				return m.executeTableBuilderMethod(recvSel.Sel.Name, args, tableBuilder)
+			}
+		}
+		// Also handle case where X is an Ident (sim) followed by a selector
+		// Pattern: sim.AlterTable("user").AddIndex("idx_email")
+		// This might appear as SelectorExpr(SelectorExpr(CallExpr), AddIndex)
+		if recvSel2, ok := recvSel.X.(*ast.SelectorExpr); ok {
+			// This is a deeper nesting, try to interpret it
+			if recvCall, ok := recvSel2.X.(*ast.CallExpr); ok {
+				tableBuilder := m.interpretCallForChaining(recvCall, sim)
+				if tableBuilder != nil {
+					// First execute the intermediate method (e.g., AlterTable)
+					intermediateArgs := make([]interface{}, 0, len(recvCall.Args))
+					for _, arg := range recvCall.Args {
+						val := m.extractValue(arg)
+						intermediateArgs = append(intermediateArgs, val)
+					}
+					// Get the intermediate method name
+					if intermediateSel, ok := recvCall.Fun.(*ast.SelectorExpr); ok {
+						// Check if receiver is 'sim'
+						if ident, ok := intermediateSel.X.(*ast.Ident); ok && ident.Name == "sim" {
+							// Execute AlterTable to get TableBuilder
+							tableBuilder = m.executeSchemaBuilderMethodForChaining(intermediateSel.Sel.Name, intermediateArgs, sim)
+							if tableBuilder != nil {
+								// Now execute the final method (e.g., AddIndex)
+								args := make([]interface{}, 0, len(call.Args))
+								for _, arg := range call.Args {
+									val := m.extractValue(arg)
+									args = append(args, val)
+								}
+								return m.executeTableBuilderMethod(recvSel.Sel.Name, args, tableBuilder)
+							}
+						}
+					}
+				}
 			}
 		}
 	}
