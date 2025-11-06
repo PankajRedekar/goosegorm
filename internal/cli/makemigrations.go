@@ -11,6 +11,7 @@ import (
 	"github.com/pankajredekar/goosegorm/internal/loader"
 	"github.com/pankajredekar/goosegorm/internal/modelreflect"
 	"github.com/pankajredekar/goosegorm/internal/runner"
+	"github.com/pankajredekar/goosegorm/internal/schema"
 	"github.com/pankajredekar/goosegorm/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -37,22 +38,7 @@ var makemigrationsCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Load existing migrations
-		registry, err := loadMigrationsFromDir(cfg.MigrationsDir, cfg.PackageName)
-		if err != nil {
-			utils.PrintError("Failed to load migrations: %v", err)
-			os.Exit(1)
-		}
-
-		// Simulate schema from existing migrations
-		simRunner := runner.NewRunner(nil, registry, nil)
-		simulatedSchema, err := simRunner.SimulateSchema()
-		if err != nil {
-			utils.PrintError("Failed to simulate schema: %v", err)
-			os.Exit(1)
-		}
-
-		// Parse models
+		// Parse models (only need to do this once)
 		models, err := modelreflect.ParseModelsFromDir(cfg.ModelsDir, cfg.IgnoreModels)
 		if err != nil {
 			utils.PrintError("Failed to parse models: %v", err)
@@ -69,32 +55,69 @@ var makemigrationsCmd = &cobra.Command{
 
 		utils.PrintInfo("Found %d managed models", len(managedModels))
 
-		// Compare schema
-		diffs, err := diff.CompareSchema(simulatedSchema.Schema, managedModels)
-		if err != nil {
-			utils.PrintError("Failed to compare schema: %v", err)
-			os.Exit(1)
+		// Initialize variables for loop
+		var registry *runner.Registry
+		var simulatedSchema *schema.SchemaBuilder
+
+		// Loop until no changes are found
+		iteration := 0
+		maxIterations := 100 // Safety limit to prevent infinite loops
+
+		for {
+			iteration++
+			if iteration > maxIterations {
+				utils.PrintError("Maximum iterations (%d) reached. Stopping to prevent infinite loop.", maxIterations)
+				os.Exit(1)
+			}
+
+			// Reload migrations to include newly generated ones
+			registry, err = loadMigrationsFromDir(cfg.MigrationsDir, cfg.PackageName)
+			if err != nil {
+				utils.PrintError("Failed to load migrations: %v", err)
+				os.Exit(1)
+			}
+
+			// Simulate schema from existing migrations
+			simRunner := runner.NewRunner(nil, registry, nil)
+			simulatedSchema, err = simRunner.SimulateSchema()
+			if err != nil {
+				utils.PrintError("Failed to simulate schema: %v", err)
+				os.Exit(1)
+			}
+
+			// Compare schema
+			diffs, err := diff.CompareSchema(simulatedSchema.Schema, managedModels)
+			if err != nil {
+				utils.PrintError("Failed to compare schema: %v", err)
+				os.Exit(1)
+			}
+
+			if len(diffs) == 0 {
+				if iteration == 1 {
+					utils.PrintSuccess("No changes detected")
+				} else {
+					utils.PrintSuccess("No more changes detected after %d iteration(s)", iteration-1)
+				}
+				return
+			}
+
+			utils.PrintInfo("Found %d changes (iteration %d)", len(diffs), iteration)
+
+			// Generate migration name from diffs
+			migrationName := generateMigrationName(diffs)
+
+			// Generate migration file
+			gen := generator.NewGenerator(cfg.MigrationsDir, cfg.PackageName)
+			filePath, err := gen.GenerateMigration(migrationName, diffs)
+			if err != nil {
+				utils.PrintError("Failed to generate migration: %v", err)
+				os.Exit(1)
+			}
+
+			utils.PrintSuccess("Generated migration: %s", filepath.Base(filePath))
+
+			// Continue loop to check for more changes
 		}
-
-		if len(diffs) == 0 {
-			utils.PrintSuccess("No changes detected")
-			return
-		}
-
-		utils.PrintInfo("Found %d changes", len(diffs))
-
-		// Generate migration name from diffs
-		migrationName := generateMigrationName(diffs)
-
-		// Generate migration file
-		gen := generator.NewGenerator(cfg.MigrationsDir, cfg.PackageName)
-		filePath, err := gen.GenerateMigration(migrationName, diffs)
-		if err != nil {
-			utils.PrintError("Failed to generate migration: %v", err)
-			os.Exit(1)
-		}
-
-		utils.PrintSuccess("Generated migration: %s", filepath.Base(filePath))
 	},
 }
 
@@ -112,6 +135,14 @@ func generateMigrationName(diffs []diff.Diff) string {
 			parts = append(parts, "drop_"+d.Column.Name+"_from_"+d.TableName)
 		case "modify_column":
 			parts = append(parts, "modify_"+d.Column.Name+"_in_"+d.TableName)
+		case "add_index":
+			if d.Index != nil {
+				parts = append(parts, "add_index_"+d.Index.Name+"_to_"+d.TableName)
+			}
+		case "drop_index":
+			if d.Index != nil {
+				parts = append(parts, "drop_index_"+d.Index.Name+"_from_"+d.TableName)
+			}
 		}
 	}
 	if len(parts) == 0 {
