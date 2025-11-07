@@ -145,11 +145,23 @@ func LoadMigrationsFromCompiled(migrationsDir string, packageName string) (*runn
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	// Get the parent directory (where go.mod should be)
-	parentDir := filepath.Dir(absPath)
+	// Find go.mod to determine module path and project root
+	// Start from migrations directory and walk up to find go.mod
+	projectRoot := absPath
+	for {
+		goModPath := filepath.Join(projectRoot, "go.mod")
+		if _, err := os.Stat(goModPath); err == nil {
+			break
+		}
+		parent := filepath.Dir(projectRoot)
+		if parent == projectRoot {
+			return nil, fmt.Errorf("go.mod not found in project")
+		}
+		projectRoot = parent
+	}
 
-	// Find go.mod to determine module path
-	modulePath, err := findModulePath(parentDir)
+	// Find module path from go.mod
+	modulePath, err := findModulePath(projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find module path: %w", err)
 	}
@@ -194,6 +206,15 @@ func LoadMigrationsFromCompiled(migrationsDir string, packageName string) (*runn
 	}
 
 	helperFile := filepath.Join(helperDir, "main.go")
+	// Calculate the relative path from project root to migrations directory
+	relPath, err := filepath.Rel(projectRoot, absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate relative path: %w", err)
+	}
+	// Convert to forward slashes for import path (Go uses forward slashes)
+	relPath = filepath.ToSlash(relPath)
+	// Build the import path: modulePath/relativePath
+	migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, relPath)
 	helperContent := fmt.Sprintf(`package main
 
 import (
@@ -201,7 +222,7 @@ import (
 	"fmt"
 	"os"
 	"github.com/pankajredekar/goosegorm"
-	_ "goosegorm_helper/migrations"
+	_ "%s"
 )
 
 func main() {
@@ -225,36 +246,37 @@ func main() {
 	
 	fmt.Print(string(jsonData))
 }
-`)
+`, migrationsImportPath)
 
 	if err := os.WriteFile(helperFile, []byte(helperContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write helper program: %w", err)
 	}
 
 	// Create go.mod for helper
+	// Use replace directive to point migrations to the actual project location
 	goModContent := fmt.Sprintf(`module goosegorm_helper
 
-go 1.25
+go 1.21
 
 require (
 	github.com/pankajredekar/goosegorm v0.0.0
 	%s v0.0.0
 )
 
-replace github.com/pankajredekar/goosegorm => %s
 replace %s => %s
-`, modulePath, filepath.Dir(filepath.Dir(filepath.Dir(absPath))), modulePath, parentDir)
+`, migrationsImportPath, migrationsImportPath, absPath)
 
 	if err := os.WriteFile(filepath.Join(helperDir, "go.mod"), []byte(goModContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write go.mod: %w", err)
 	}
 
-	// Run go mod tidy first
+	// Run go mod tidy first and capture output
 	cmdTidy := exec.Command("go", "mod", "tidy")
 	cmdTidy.Dir = helperDir
 	cmdTidy.Env = os.Environ()
-	if err := cmdTidy.Run(); err != nil {
-		// Ignore errors from go mod tidy
+	tidyOutput, err := cmdTidy.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run go mod tidy in helper directory: %w\nOutput: %s", err, string(tidyOutput))
 	}
 
 	// Build and run helper program
