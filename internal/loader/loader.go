@@ -184,14 +184,32 @@ func LoadMigrationsFromCompiled(migrationsDir string, packageName string) (*runn
 	migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, relPath)
 
 	// Create helper program that imports migrations
-	// We need to copy migrations to match the module structure in helper directory
-	// e.g., if migrations are in internal/data/migrations, copy to helperDir/internal/data/migrations
-	migrationsSubDir := filepath.Join(helperDir, relPath)
+	// If migrations are in an "internal" directory, we can't import them from outside the module
+	// So we copy them to a non-internal location in the helper directory
+	var migrationsSubDir string
+	var helperImportPath string
+	if strings.Contains(relPath, "internal/") || strings.HasPrefix(relPath, "internal/") {
+		// For internal packages, copy to a non-internal location
+		// Replace "internal/" with "migrations/" to avoid the internal package restriction
+		nonInternalPath := strings.Replace(relPath, "internal/", "migrations/", 1)
+		// If it starts with internal/, just use migrations/
+		if strings.HasPrefix(relPath, "internal/") {
+			nonInternalPath = "migrations" + strings.TrimPrefix(relPath, "internal")
+		}
+		migrationsSubDir = filepath.Join(helperDir, nonInternalPath)
+		// Import path will be relative to helper module
+		helperImportPath = fmt.Sprintf("goosegorm_helper/%s", filepath.ToSlash(nonInternalPath))
+	} else {
+		// For non-internal packages, maintain the directory structure
+		migrationsSubDir = filepath.Join(helperDir, relPath)
+		helperImportPath = migrationsImportPath
+	}
+	
 	if err := os.MkdirAll(migrationsSubDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create migrations subdirectory: %w", err)
 	}
 
-	// Copy migration files to helper directory maintaining the directory structure
+	// Copy migration files to helper directory
 	err = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -248,7 +266,7 @@ func main() {
 	
 	fmt.Print(string(jsonData))
 }
-`, migrationsImportPath)
+`, helperImportPath)
 
 	if err := os.WriteFile(helperFile, []byte(helperContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write helper program: %w", err)
