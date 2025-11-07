@@ -173,14 +173,25 @@ func LoadMigrationsFromCompiled(migrationsDir string, packageName string) (*runn
 	}
 	defer os.RemoveAll(helperDir)
 
+	// Calculate the relative path from project root to migrations directory
+	relPath, err := filepath.Rel(projectRoot, absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate relative path: %w", err)
+	}
+	// Convert to forward slashes for import path (Go uses forward slashes)
+	relPath = filepath.ToSlash(relPath)
+	// Build the import path: modulePath/relativePath
+	migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, relPath)
+
 	// Create helper program that imports migrations
-	// We need to copy migrations to a subdirectory first
-	migrationsSubDir := filepath.Join(helperDir, "migrations")
+	// We need to copy migrations to match the module structure in helper directory
+	// e.g., if migrations are in internal/data/migrations, copy to helperDir/internal/data/migrations
+	migrationsSubDir := filepath.Join(helperDir, relPath)
 	if err := os.MkdirAll(migrationsSubDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create migrations subdirectory: %w", err)
 	}
 
-	// Copy migration files to helper directory
+	// Copy migration files to helper directory maintaining the directory structure
 	err = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -206,15 +217,6 @@ func LoadMigrationsFromCompiled(migrationsDir string, packageName string) (*runn
 	}
 
 	helperFile := filepath.Join(helperDir, "main.go")
-	// Calculate the relative path from project root to migrations directory
-	relPath, err := filepath.Rel(projectRoot, absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate relative path: %w", err)
-	}
-	// Convert to forward slashes for import path (Go uses forward slashes)
-	relPath = filepath.ToSlash(relPath)
-	// Build the import path: modulePath/relativePath
-	migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, relPath)
 	helperContent := fmt.Sprintf(`package main
 
 import (
@@ -252,19 +254,72 @@ func main() {
 		return nil, fmt.Errorf("failed to write helper program: %w", err)
 	}
 
+	// Try to get goosegorm version from project's go.mod
+	goosegormVersion := "v0.0.0"
+	goosegormReplacePath := ""
+	projectGoModPath := filepath.Join(projectRoot, "go.mod")
+	inRequireBlock := false
+	if content, err := os.ReadFile(projectGoModPath); err == nil {
+		lines := strings.Split(string(content), "\n")
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			// Check for replace directive
+			if strings.HasPrefix(trimmed, "replace github.com/pankajredekar/goosegorm =>") {
+				parts := strings.Fields(trimmed)
+				if len(parts) >= 4 {
+					relPath := parts[3]
+					absPath, err := filepath.Abs(filepath.Join(projectRoot, relPath))
+					if err == nil {
+						goosegormReplacePath = absPath
+					}
+				}
+			}
+			// Track require block
+			if trimmed == "require (" {
+				inRequireBlock = true
+				continue
+			}
+			if inRequireBlock && trimmed == ")" {
+				inRequireBlock = false
+				continue
+			}
+			// Check for require with version (inside require block or single line)
+			if (inRequireBlock || strings.HasPrefix(trimmed, "require ")) && strings.Contains(trimmed, "github.com/pankajredekar/goosegorm") {
+				parts := strings.Fields(trimmed)
+				// Remove "require" prefix if present
+				if parts[0] == "require" {
+					parts = parts[1:]
+				}
+				// Find goosegorm in the line
+				for i, part := range parts {
+					if part == "github.com/pankajredekar/goosegorm" && i+1 < len(parts) {
+						goosegormVersion = parts[i+1]
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Create go.mod for helper
-	// Use replace directive to point migrations to the actual project location
+	// Use replace directive to point the entire module to the project root
+	// This allows Go to resolve the migrations import path correctly
 	goModContent := fmt.Sprintf(`module goosegorm_helper
 
 go 1.21
 
 require (
-	github.com/pankajredekar/goosegorm v0.0.0
+	github.com/pankajredekar/goosegorm %s
 	%s v0.0.0
 )
 
 replace %s => %s
-`, migrationsImportPath, migrationsImportPath, absPath)
+`, goosegormVersion, migrationsImportPath, modulePath, projectRoot)
+	
+	// Add replace directive for goosegorm if found in project
+	if goosegormReplacePath != "" {
+		goModContent += fmt.Sprintf("\nreplace github.com/pankajredekar/goosegorm => %s\n", goosegormReplacePath)
+	}
 
 	if err := os.WriteFile(filepath.Join(helperDir, "go.mod"), []byte(goModContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write go.mod: %w", err)
