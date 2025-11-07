@@ -463,7 +463,11 @@ func (g *Generator) generateUpRealDB(diffs []diff.Diff) string {
 					uniqueStr = "UNIQUE "
 				}
 				sb.WriteString(fmt.Sprintf("\t// Create index %s on %s (%s)\n", d.Index.Name, d.TableName, strings.Join(d.Index.Fields, ", ")))
-				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, quotedTableName, indexExpr))
+				// Escape quotes in SQL string for Go code generation
+				sqlStr := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)", uniqueStr, d.Index.Name, quotedTableName, indexExpr)
+				// Escape quotes for Go string literal
+				escapedSQL := strings.ReplaceAll(sqlStr, `"`, `\"`)
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"%s\").Error; err != nil {\n", escapedSQL))
 				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
 				sb.WriteString(fmt.Sprintf("\t}\n"))
 			}
@@ -578,7 +582,11 @@ func (g *Generator) generateDownRealDB(diffs []diff.Diff) string {
 				if d.Index.Unique {
 					uniqueStr = "UNIQUE "
 				}
-				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, quotedTableName, indexExpr))
+				// Escape quotes in SQL string for Go code generation
+				sqlStr := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)", uniqueStr, d.Index.Name, quotedTableName, indexExpr)
+				// Escape quotes for Go string literal
+				escapedSQL := strings.ReplaceAll(sqlStr, `"`, `\"`)
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"%s\").Error; err != nil {\n", escapedSQL))
 				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
 				sb.WriteString(fmt.Sprintf("\t}\n"))
 			}

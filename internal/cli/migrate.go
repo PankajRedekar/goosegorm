@@ -40,6 +40,33 @@ var migrateCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Check if migrations directory exists and has migration files
+		migrationsAbsPath, err := filepath.Abs(cfg.MigrationsDir)
+		if err != nil {
+			utils.PrintError("Failed to get absolute path for migrations: %v", err)
+			os.Exit(1)
+		}
+
+		// Check if migrations directory exists
+		if !utils.FileExists(migrationsAbsPath) {
+			utils.PrintError("Migrations directory does not exist: %s", migrationsAbsPath)
+			utils.PrintInfo("Please run 'goosegorm makemigrations' first to create initial migrations")
+			os.Exit(1)
+		}
+
+		// Check if there are any .go files in the migrations directory
+		hasMigrations, err := utils.HasMigrationFiles(migrationsAbsPath)
+		if err != nil {
+			utils.PrintError("Failed to check migrations directory: %v", err)
+			os.Exit(1)
+		}
+
+		if !hasMigrations {
+			utils.PrintError("No migration files found in: %s", migrationsAbsPath)
+			utils.PrintInfo("Please run 'goosegorm makemigrations' first to create initial migrations")
+			os.Exit(1)
+		}
+
 		// Find module path
 		modulePath, err := findModulePath(configDir)
 		if err != nil {
@@ -48,12 +75,7 @@ var migrateCmd = &cobra.Command{
 		}
 
 		// Calculate the relative path from project root to migrations directory
-		migrationsAbsPath, err := filepath.Abs(cfg.MigrationsDir)
-		if err != nil {
-			utils.PrintError("Failed to get absolute path for migrations: %v", err)
-			os.Exit(1)
-		}
-		
+		// migrationsAbsPath was already calculated above
 		relPath, err := filepath.Rel(configDir, migrationsAbsPath)
 		if err != nil {
 			utils.PrintError("Failed to calculate relative path: %v", err)

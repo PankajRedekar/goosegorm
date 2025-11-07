@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // Color output helpers
@@ -48,4 +49,20 @@ func DirExists(path string) bool {
 		return false
 	}
 	return info.IsDir()
+}
+
+// HasMigrationFiles checks if the migrations directory contains any .go files
+func HasMigrationFiles(migrationsDir string) (bool, error) {
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		return false, err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".go" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
