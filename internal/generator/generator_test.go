@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -452,5 +453,100 @@ func TestGenerateMigration_CompositeIndex(t *testing.T) {
 	// Check for index creation
 	if !strings.Contains(contentStr, "CREATE INDEX IF NOT EXISTS idx_name_email") {
 		t.Error("Migration should contain CREATE INDEX for composite index")
+	}
+}
+
+func TestGenerateEmptyMigration_WithName(t *testing.T) {
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	gen := NewGenerator(migrationsDir, "migrations")
+
+	filePath, err := gen.GenerateEmptyMigration("add_user_preferences")
+	if err != nil {
+		t.Fatalf("GenerateEmptyMigration failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("Failed to read migration file: %v", err)
+	}
+
+	contentStr := string(content)
+
+	// Check for struct name
+	if !strings.Contains(contentStr, "type AddUserPreferences struct{}") {
+		t.Error("Migration should contain AddUserPreferences struct")
+	}
+
+	// Check for Name method
+	if !strings.Contains(contentStr, "return \"add_user_preferences\"") {
+		t.Error("Migration Name() should return 'add_user_preferences'")
+	}
+
+	// Check for TODO comments
+	if !strings.Contains(contentStr, "TODO: Add your simulation logic here") {
+		t.Error("Migration should contain TODO comments")
+	}
+
+	// Check for init function
+	if !strings.Contains(contentStr, "goosegorm.RegisterMigration(AddUserPreferences{})") {
+		t.Error("Migration should register AddUserPreferences")
+	}
+
+	// Check file name format
+	fileName := filepath.Base(filePath)
+	if !strings.HasPrefix(fileName, "20") || !strings.Contains(fileName, "add_user_preferences.go") {
+		t.Errorf("Unexpected file name format: %s", fileName)
+	}
+}
+
+func TestGenerateEmptyMigration_WithoutName(t *testing.T) {
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	gen := NewGenerator(migrationsDir, "migrations")
+
+	filePath, err := gen.GenerateEmptyMigration("")
+	if err != nil {
+		t.Fatalf("GenerateEmptyMigration failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("Failed to read migration file: %v", err)
+	}
+
+	contentStr := string(content)
+
+	// Extract version from file name
+	fileName := filepath.Base(filePath)
+	parts := strings.Split(fileName, "_")
+	if len(parts) < 2 {
+		t.Fatalf("Unexpected file name format: %s", fileName)
+	}
+	version := parts[0]
+
+	// Check for Migration{version} struct name
+	expectedStructName := "Migration" + version
+	if !strings.Contains(contentStr, fmt.Sprintf("type %s struct{}", expectedStructName)) {
+		t.Errorf("Migration should contain %s struct, got: %s", expectedStructName, contentStr)
+	}
+
+	// Check for migration_{version} name
+	expectedName := "migration_" + version
+	if !strings.Contains(contentStr, fmt.Sprintf("return \"%s\"", expectedName)) {
+		t.Errorf("Migration Name() should return '%s'", expectedName)
+	}
+
+	// Check file name format (should be {version}_migration.go)
+	if !strings.HasSuffix(fileName, "_migration.go") {
+		t.Errorf("File name should end with '_migration.go', got: %s", fileName)
+	}
+	if !strings.HasPrefix(fileName, version+"_migration.go") {
+		t.Errorf("File name should be '{version}_migration.go', got: %s", fileName)
+	}
+
+	// Check for init function with Migration{version}
+	if !strings.Contains(contentStr, fmt.Sprintf("goosegorm.RegisterMigration(%s{})", expectedStructName)) {
+		t.Error("Migration should register with Migration{version} struct")
 	}
 }

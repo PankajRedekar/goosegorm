@@ -251,6 +251,110 @@ func (g *Generator) GenerateMigration(name string, diffs []diff.Diff) (string, e
 	return filePath, nil
 }
 
+// GenerateEmptyMigration generates an empty migration file
+// If name is empty, uses Migration{version} format for struct and file name
+func (g *Generator) GenerateEmptyMigration(name string) (string, error) {
+	version := generateVersion()
+
+	// Determine migration name and struct name
+	var migrationName string
+	var structName string
+	var fileName string
+
+	if name == "" {
+		// No name provided: use Migration{version} format
+		structName = fmt.Sprintf("Migration%s", version)
+		migrationName = fmt.Sprintf("migration_%s", version)
+		fileName = fmt.Sprintf("%s_migration.go", version)
+	} else {
+		// Name provided: use it
+		sanitizedName := sanitizeName(name)
+		migrationName = sanitizedName
+		structName = toCamelCase(sanitizedName)
+		fileName = fmt.Sprintf("%s_%s.go", version, sanitizedName)
+	}
+
+	filePath := filepath.Join(g.migrationsDir, fileName)
+
+	// Ensure directory exists
+	if err := os.MkdirAll(g.migrationsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create migrations directory: %w", err)
+	}
+
+	content := g.generateEmptyMigrationContent(version, migrationName, structName)
+
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write migration file: %w", err)
+	}
+
+	return filePath, nil
+}
+
+// generateEmptyMigrationContent generates the content for an empty migration file
+func (g *Generator) generateEmptyMigrationContent(version, migrationName, structName string) string {
+	var sb strings.Builder
+
+	// Header
+	sb.WriteString(fmt.Sprintf("package %s\n\n", g.packageName))
+	sb.WriteString("import (\n")
+	sb.WriteString("\t\"gorm.io/gorm\"\n")
+	sb.WriteString("\t\"github.com/pankajredekar/goosegorm\"\n")
+	sb.WriteString(")\n\n")
+
+	// Migration struct
+	sb.WriteString(fmt.Sprintf("type %s struct{}\n\n", structName))
+
+	// Version method
+	sb.WriteString(fmt.Sprintf("func (m %s) Version() string { return \"%s\" }\n\n", structName, version))
+
+	// Name method
+	sb.WriteString(fmt.Sprintf("func (m %s) Name() string { return \"%s\" }\n\n", structName, migrationName))
+
+	// Up method
+	sb.WriteString(fmt.Sprintf("func (m %s) Up(db *gorm.DB) error {\n", structName))
+	sb.WriteString("\tif sim, ok := any(db).(*goosegorm.SchemaBuilder); ok {\n")
+	sb.WriteString("\t\t// Simulation mode\n")
+	sb.WriteString("\t\t// TODO: Add your simulation logic here\n")
+	sb.WriteString("\t\t// Example: sim.AlterTable(\"users\").AddColumn(\"column_name\", \"string\")\n")
+	sb.WriteString("\t\treturn nil\n")
+	sb.WriteString("\t}\n\n")
+	sb.WriteString("\t// Real DB mode\n")
+	sb.WriteString("\t// TODO: Add your migration logic here\n")
+	sb.WriteString("\t// Example:\n")
+	sb.WriteString("\t// type UserColumn struct {\n")
+	sb.WriteString("\t//     ColumnName string `gorm:\"type:varchar(255)\"`\n")
+	sb.WriteString("\t// }\n")
+	sb.WriteString("\t// if err := db.Table(\"users\").Migrator().AddColumn(&UserColumn{}, \"column_name\"); err != nil {\n")
+	sb.WriteString("\t//     return err\n")
+	sb.WriteString("\t// }\n")
+	sb.WriteString("\treturn nil\n")
+	sb.WriteString("}\n\n")
+
+	// Down method
+	sb.WriteString(fmt.Sprintf("func (m %s) Down(db *gorm.DB) error {\n", structName))
+	sb.WriteString("\tif sim, ok := any(db).(*goosegorm.SchemaBuilder); ok {\n")
+	sb.WriteString("\t\t// Simulation mode - reverse operations\n")
+	sb.WriteString("\t\t// TODO: Add reverse simulation logic here\n")
+	sb.WriteString("\t\t// Example: sim.AlterTable(\"users\").DropColumn(\"column_name\")\n")
+	sb.WriteString("\t\treturn nil\n")
+	sb.WriteString("\t}\n\n")
+	sb.WriteString("\t// Real DB mode - reverse operations\n")
+	sb.WriteString("\t// TODO: Add reverse migration logic here\n")
+	sb.WriteString("\t// Example:\n")
+	sb.WriteString("\t// if err := db.Migrator().DropColumn(\"users\", \"column_name\"); err != nil {\n")
+	sb.WriteString("\t//     return err\n")
+	sb.WriteString("\t// }\n")
+	sb.WriteString("\treturn nil\n")
+	sb.WriteString("}\n\n")
+
+	// Init function
+	sb.WriteString("func init() {\n")
+	sb.WriteString(fmt.Sprintf("\tgoosegorm.RegisterMigration(%s{})\n", structName))
+	sb.WriteString("}\n")
+
+	return sb.String()
+}
+
 func (g *Generator) generateMigrationContent(version, name string, diffs []diff.Diff) string {
 	var sb strings.Builder
 

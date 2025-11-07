@@ -18,9 +18,9 @@ import (
 )
 
 var makemigrationsCmd = &cobra.Command{
-	Use:   "makemigrations",
+	Use:   "makemigrations [migration_name]",
 	Short: "Generate new migration files",
-	Long:  "Compares the current models with the simulated schema and generates migration files",
+	Long:  "Compares the current models with the simulated schema and generates migration files. Use --empty to create an empty migration file.",
 	Run: func(cmd *cobra.Command, args []string) {
 		configPath := "goosegorm.yml"
 		if !utils.FileExists(configPath) {
@@ -37,6 +37,27 @@ var makemigrationsCmd = &cobra.Command{
 		if err := cfg.Validate(); err != nil {
 			utils.PrintError("Invalid config: %v", err)
 			os.Exit(1)
+		}
+
+		// Check for --empty flag
+		emptyFlag, _ := cmd.Flags().GetBool("empty")
+		if emptyFlag {
+			// Handle empty migration generation
+			var migrationName string
+			if len(args) > 0 {
+				migrationName = args[0]
+			}
+			// If no name provided, will use Migration{version} format
+
+			gen := generator.NewGenerator(cfg.MigrationsDir, cfg.PackageName)
+			filePath, err := gen.GenerateEmptyMigration(migrationName)
+			if err != nil {
+				utils.PrintError("Failed to generate empty migration: %v", err)
+				os.Exit(1)
+			}
+
+			utils.PrintSuccess("Generated empty migration: %s", filepath.Base(filePath))
+			return
 		}
 
 		// Parse models (only need to do this once)
@@ -190,5 +211,6 @@ func findModulePath(dir string) (string, error) {
 }
 
 func init() {
+	makemigrationsCmd.Flags().Bool("empty", false, "Create an empty migration file")
 	rootCmd.AddCommand(makemigrationsCmd)
 }
