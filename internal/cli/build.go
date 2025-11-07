@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/pankajredekar/goosegorm/internal/config"
 	"github.com/pankajredekar/goosegorm/internal/utils"
@@ -71,7 +70,8 @@ var buildCmd = &cobra.Command{
 		// Build the import path: modulePath/relativePath
 		migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, relPath)
 
-		// Create temporary migrator package
+		// Create temporary migrator package within the project
+		// This allows us to use the project's go.mod instead of creating a separate one
 		tempMigratorDir := filepath.Join(configDir, ".goosegorm_migrator")
 		defer os.RemoveAll(tempMigratorDir) // Clean up after build
 
@@ -269,104 +269,13 @@ func connectDB(databaseURL string) (*gorm.DB, error) {
 			os.Exit(1)
 		}
 
-		// Read the app's go.mod to find goosegorm replace path
-		appGoModPath := filepath.Join(configDir, "go.mod")
-		goosegormReplacePath := ""
-		if content, err := os.ReadFile(appGoModPath); err == nil {
-			lines := strings.Split(string(content), "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "replace github.com/pankajredekar/goosegorm =>") {
-					parts := strings.Fields(line)
-					if len(parts) >= 4 {
-						relPath := parts[3]
-						absPath, err := filepath.Abs(filepath.Join(configDir, relPath))
-						if err == nil {
-							goosegormReplacePath = absPath
-						}
-					}
-					break
-				}
-			}
-		}
-
-		// Fallback: try to find goosegorm root by searching up
-		if goosegormReplacePath == "" {
-			searchDir := configDir
-			for i := 0; i < 10; i++ {
-				goModPath := filepath.Join(searchDir, "go.mod")
-				if content, err := os.ReadFile(goModPath); err == nil {
-					if strings.Contains(string(content), "module github.com/pankajredekar/goosegorm") {
-						goosegormReplacePath = searchDir
-						break
-					}
-				}
-				parent := filepath.Dir(searchDir)
-				if parent == searchDir {
-					break
-				}
-				searchDir = parent
-			}
-		}
-
-		// If still not found, try using go list to find the module
-		if goosegormReplacePath == "" {
-			cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/pankajredekar/goosegorm")
-			cmd.Dir = configDir
-			if output, err := cmd.Output(); err == nil {
-				path := strings.TrimSpace(string(output))
-				if path != "" && path != "command-line-arguments" {
-					goosegormReplacePath = path
-				}
-			}
-		}
-
-		// If still not found, it's okay - we'll use the version from go.mod without replace
-		// This works when goosegorm is installed via go get/go install
-
-		// Create go.mod for temporary migrator
-		goModFile := filepath.Join(tempMigratorDir, "go.mod")
-		configDirAbs, _ := filepath.Abs(configDir)
-		goModContent := fmt.Sprintf(`module goosegorm_migrator
-
-go 1.25
-
-require (
-	github.com/pankajredekar/goosegorm v0.0.0
-	%s v0.0.0
-	gorm.io/driver/postgres v1.5.4
-	gorm.io/driver/sqlite v1.5.4
-	gorm.io/gorm v1.25.5
-)
-
-replace %s => %s
-`, modulePath, modulePath, configDirAbs)
-	
-	// Add replace directive for goosegorm only if we found a local path
-	if goosegormReplacePath != "" {
-		goModContent = strings.TrimSuffix(goModContent, "\n")
-		goModContent += fmt.Sprintf("\nreplace github.com/pankajredekar/goosegorm => %s\n", goosegormReplacePath)
-	}
-
-		if err := os.WriteFile(goModFile, []byte(goModContent), 0644); err != nil {
-			utils.PrintError("Failed to create go.mod for migrator: %v", err)
-			os.Exit(1)
-		}
-
-		// Run go mod tidy to resolve dependencies
-		tidyCmd := exec.Command("go", "mod", "tidy")
-		tidyCmd.Dir = tempMigratorDir
-		tidyCmd.Env = os.Environ()
-		if output, err := tidyCmd.CombinedOutput(); err != nil {
-			// Log but don't fail - go mod tidy might have warnings
-			utils.PrintInfo("go mod tidy output: %s", string(output))
-		}
-
-		// Build the migrator
+		// Build the migrator using the project's go.mod
+		// Since the migrator is in a subdirectory of the project, we can use the project's go.mod
 		utils.PrintInfo("Building migrator...")
 		binaryPath := filepath.Join(tempMigratorDir, "goosegorm")
+		// Build from project root to use project's go.mod
 		buildCmd := exec.Command("go", "build", "-o", binaryPath, mainFile)
-		buildCmd.Dir = tempMigratorDir
+		buildCmd.Dir = configDir // Build from project root to use project's go.mod
 		buildCmd.Env = os.Environ()
 		if output, err := buildCmd.CombinedOutput(); err != nil {
 			utils.PrintError("Failed to build migrator: %v\nOutput: %s", err, string(output))
