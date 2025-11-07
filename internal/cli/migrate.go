@@ -48,6 +48,23 @@ var migrateCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Calculate the relative path from project root to migrations directory
+		migrationsAbsPath, err := filepath.Abs(cfg.MigrationsDir)
+		if err != nil {
+			utils.PrintError("Failed to get absolute path for migrations: %v", err)
+			os.Exit(1)
+		}
+		
+		relPath, err := filepath.Rel(configDir, migrationsAbsPath)
+		if err != nil {
+			utils.PrintError("Failed to calculate relative path: %v", err)
+			os.Exit(1)
+		}
+		// Convert to forward slashes for import path (Go uses forward slashes)
+		relPath = filepath.ToSlash(relPath)
+		// Build the import path: modulePath/relativePath
+		migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, relPath)
+
 		// Create temporary migrator package in the same directory as goosegorm.yml
 		tempMigratorDir := filepath.Join(configDir, ".goosegorm_migrator")
 		defer os.RemoveAll(tempMigratorDir) // Clean up after migration
@@ -59,7 +76,6 @@ var migrateCmd = &cobra.Command{
 
 		// Create main.go for temporary migrator
 		mainFile := filepath.Join(tempMigratorDir, "main.go")
-		migrationsImportPath := fmt.Sprintf("%s/%s", modulePath, cfg.PackageName)
 		mainContent := fmt.Sprintf(`package main
 
 import (
