@@ -304,6 +304,7 @@ func main() {
 	// Create go.mod for helper
 	// Use replace directive to point the entire module to the project root
 	// This allows Go to resolve the migrations import path correctly
+	// Note: We only require the root module, not the subdirectory path
 	goModContent := fmt.Sprintf(`module goosegorm_helper
 
 go 1.21
@@ -314,8 +315,8 @@ require (
 )
 
 replace %s => %s
-`, goosegormVersion, migrationsImportPath, modulePath, projectRoot)
-	
+`, goosegormVersion, modulePath, modulePath, projectRoot)
+
 	// Add replace directive for goosegorm if found in project
 	if goosegormReplacePath != "" {
 		goModContent += fmt.Sprintf("\nreplace github.com/pankajredekar/goosegorm => %s\n", goosegormReplacePath)
