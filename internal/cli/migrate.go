@@ -285,10 +285,20 @@ func connectDB(databaseURL string) (*gorm.DB, error) {
 			}
 		}
 
+		// If still not found, try using go list to find the module
 		if goosegormReplacePath == "" {
-			utils.PrintError("Failed to find goosegorm package root")
-			os.Exit(1)
+			cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/pankajredekar/goosegorm")
+			cmd.Dir = configDir
+			if output, err := cmd.Output(); err == nil {
+				path := strings.TrimSpace(string(output))
+				if path != "" && path != "command-line-arguments" {
+					goosegormReplacePath = path
+				}
+			}
 		}
+
+		// If still not found, it's okay - we'll use the version from go.mod without replace
+		// This works when goosegorm is installed via go get/go install
 
 		// Create go.mod for temporary migrator
 		goModFile := filepath.Join(tempMigratorDir, "go.mod")
@@ -305,9 +315,14 @@ require (
 	gorm.io/gorm v1.25.5
 )
 
-replace github.com/pankajredekar/goosegorm => %s
 replace %s => %s
-`, modulePath, goosegormReplacePath, modulePath, configDirAbs)
+`, modulePath, modulePath, configDirAbs)
+	
+	// Add replace directive for goosegorm only if we found a local path
+	if goosegormReplacePath != "" {
+		goModContent = strings.TrimSuffix(goModContent, "\n")
+		goModContent += fmt.Sprintf("\nreplace github.com/pankajredekar/goosegorm => %s\n", goosegormReplacePath)
+	}
 
 		if err := os.WriteFile(goModFile, []byte(goModContent), 0644); err != nil {
 			utils.PrintError("Failed to create go.mod for migrator: %v", err)

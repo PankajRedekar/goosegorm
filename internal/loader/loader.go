@@ -204,7 +204,7 @@ func LoadMigrationsFromCompiled(migrationsDir string, packageName string) (*runn
 		migrationsSubDir = filepath.Join(helperDir, relPath)
 		helperImportPath = migrationsImportPath
 	}
-	
+
 	if err := os.MkdirAll(migrationsSubDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create migrations subdirectory: %w", err)
 	}
