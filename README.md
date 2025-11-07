@@ -69,6 +69,8 @@ go run github.com/pankajredekar/goosegorm/cmd/goosegorm
    ```
 
 4. **Apply migrations:**
+   
+   **Development:**
    ```bash
    goosegorm migrate
    ```
@@ -79,6 +81,24 @@ go run github.com/pankajredekar/goosegorm/cmd/goosegorm
    - Run the compiled migrator to execute migrations
    - Automatically clean up the temporary package
    - Execute migrations using real compiled code with proper struct definitions
+   
+   **Production:**
+   ```bash
+   # Step 1: Build the migrator binary
+   goosegorm build
+   
+   # Step 2: Deploy the binary to your production server
+   # (The binary is saved to the path specified in goosegorm.yml build_path)
+   
+   # Step 3: Run migrations in production
+   ./bin/goosegorm migrate
+   
+   # Or use other commands
+   ./bin/goosegorm show      # Check migration status
+   ./bin/goosegorm rollback  # Rollback if needed
+   ```
+   
+   The production binary is standalone and doesn't require the `goosegorm` CLI tool to be installed on the server.
 
 ## Configuration (goosegorm.yml)
 
