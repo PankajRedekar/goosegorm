@@ -16,6 +16,7 @@ type ParsedModel struct {
 	Fields     []Field
 	File       string
 	StructNode *ast.StructType
+	TableName  string // Custom table name from TableName() method, empty if not found
 }
 
 // Field represents a struct field
@@ -62,6 +63,33 @@ func ParseModelsFromDir(dir string, ignoreModels []string) ([]ParsedModel, error
 func parseFileModels(fset *token.FileSet, file *ast.File, pkgName, fileName string, ignoreMap map[string]bool) []ParsedModel {
 	var models []ParsedModel
 
+	// First pass: collect all struct types
+	structTypes := make(map[string]*ast.StructType)
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+
+			structTypes[ts.Name.Name] = st
+		}
+	}
+
+	// Second pass: find TableName() methods and associate them with structs
+	tableNameMethods := findTableNameMethods(file, structTypes)
+
+	// Third pass: create ParsedModel instances
 	for _, decl := range file.Decls {
 		gd, ok := decl.(*ast.GenDecl)
 		if !ok {
@@ -112,6 +140,9 @@ func parseFileModels(fset *token.FileSet, file *ast.File, pkgName, fileName stri
 				}
 			}
 
+			// Get custom table name if TableName() method exists
+			customTableName := tableNameMethods[modelName]
+
 			models = append(models, ParsedModel{
 				Name:       modelName,
 				Package:    pkgName,
@@ -119,6 +150,7 @@ func parseFileModels(fset *token.FileSet, file *ast.File, pkgName, fileName stri
 				Fields:     fields,
 				File:       fileName,
 				StructNode: st,
+				TableName:  customTableName,
 			})
 		}
 	}
@@ -258,10 +290,145 @@ func parseIndexesFromGormTag(gormTag, fieldName string) []IndexInfo {
 	return indexes
 }
 
-// GetTableName gets the table name for a model (from GORM tag or default)
+// findTableNameMethods finds all TableName() methods in the file and extracts their return values
+func findTableNameMethods(file *ast.File, structTypes map[string]*ast.StructType) map[string]string {
+	result := make(map[string]string)
+
+	// First, collect all string constants in the file
+	constants := findStringConstants(file)
+
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+
+		// Check if this is a method (has a receiver)
+		if fd.Recv == nil || len(fd.Recv.List) == 0 {
+			continue
+		}
+
+		// Check if method name is TableName
+		if fd.Name.Name != "TableName" {
+			continue
+		}
+
+		// Check if return type is string
+		if fd.Type.Results == nil || len(fd.Type.Results.List) != 1 {
+			continue
+		}
+
+		returnType := exprToString(fd.Type.Results.List[0].Type)
+		if returnType != "string" {
+			continue
+		}
+
+		// Get receiver type name
+		recvType := fd.Recv.List[0].Type
+		var recvTypeName string
+		switch rt := recvType.(type) {
+		case *ast.Ident:
+			recvTypeName = rt.Name
+		case *ast.StarExpr:
+			if ident, ok := rt.X.(*ast.Ident); ok {
+				recvTypeName = ident.Name
+			}
+		}
+
+		if recvTypeName == "" {
+			continue
+		}
+
+		// Extract return value from method body
+		if fd.Body != nil {
+			tableName := extractTableNameFromMethod(fd.Body, constants)
+			if tableName != "" {
+				result[recvTypeName] = tableName
+			}
+		}
+	}
+
+	return result
+}
+
+// findStringConstants finds all string constants in the file
+func findStringConstants(file *ast.File) map[string]string {
+	result := make(map[string]string)
+
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+
+			// Check if type is string
+			if vs.Type != nil {
+				typeName := exprToString(vs.Type)
+				if typeName != "string" {
+					continue
+				}
+			}
+
+			// Extract constant names and values
+			for i, name := range vs.Names {
+				if i < len(vs.Values) {
+					value := vs.Values[i]
+					if lit, ok := value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						result[name.Name] = strings.Trim(lit.Value, `"`)
+					}
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// extractTableNameFromMethod extracts the string return value from a TableName() method
+func extractTableNameFromMethod(body *ast.BlockStmt, constants map[string]string) string {
+	// Look for return statements
+	for _, stmt := range body.List {
+		retStmt, ok := stmt.(*ast.ReturnStmt)
+		if !ok {
+			continue
+		}
+
+		if len(retStmt.Results) == 0 {
+			continue
+		}
+
+		// Try to extract string literal or constant reference
+		result := retStmt.Results[0]
+		switch r := result.(type) {
+		case *ast.BasicLit:
+			if r.Kind == token.STRING {
+				// Remove quotes
+				return strings.Trim(r.Value, `"`)
+			}
+		case *ast.Ident:
+			// Check if it's a constant reference
+			if constValue, ok := constants[r.Name]; ok {
+				return constValue
+			}
+		}
+	}
+
+	return ""
+}
+
+// GetTableName gets the table name for a model (from TableName() method or default)
 func (m *ParsedModel) GetTableName() string {
-	// This would require more sophisticated parsing
-	// For now, return snake_case of model name
+	// If custom table name is set from TableName() method, use it
+	if m.TableName != "" {
+		return m.TableName
+	}
+	// Otherwise, return snake_case of model name
 	return toSnakeCase(m.Name)
 }
 

@@ -451,13 +451,19 @@ func (g *Generator) generateUpRealDB(diffs []diff.Diff) string {
 		case "add_index":
 			// Create index using raw SQL
 			if d.Index != nil {
-				indexExpr := strings.Join(d.Index.Fields, ", ")
+				// Quote column names in index expression
+				quotedFields := make([]string, len(d.Index.Fields))
+				for i, field := range d.Index.Fields {
+					quotedFields[i] = quoteSQLIdentifier(field)
+				}
+				indexExpr := strings.Join(quotedFields, ", ")
+				quotedTableName := quoteSQLIdentifier(d.TableName)
 				uniqueStr := ""
 				if d.Index.Unique {
 					uniqueStr = "UNIQUE "
 				}
-				sb.WriteString(fmt.Sprintf("\t// Create index %s on %s (%s)\n", d.Index.Name, d.TableName, indexExpr))
-				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, d.TableName, indexExpr))
+				sb.WriteString(fmt.Sprintf("\t// Create index %s on %s (%s)\n", d.Index.Name, d.TableName, strings.Join(d.Index.Fields, ", ")))
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, quotedTableName, indexExpr))
 				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
 				sb.WriteString(fmt.Sprintf("\t}\n"))
 			}
@@ -561,12 +567,18 @@ func (g *Generator) generateDownRealDB(diffs []diff.Diff) string {
 		case "drop_index":
 			// Reverse: Recreate index
 			if d.Index != nil {
-				indexExpr := strings.Join(d.Index.Fields, ", ")
+				// Quote column names in index expression
+				quotedFields := make([]string, len(d.Index.Fields))
+				for i, field := range d.Index.Fields {
+					quotedFields[i] = quoteSQLIdentifier(field)
+				}
+				indexExpr := strings.Join(quotedFields, ", ")
+				quotedTableName := quoteSQLIdentifier(d.TableName)
 				uniqueStr := ""
 				if d.Index.Unique {
 					uniqueStr = "UNIQUE "
 				}
-				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, d.TableName, indexExpr))
+				sb.WriteString(fmt.Sprintf("\tif err := db.Exec(\"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)\").Error; err != nil {\n", uniqueStr, d.Index.Name, quotedTableName, indexExpr))
 				sb.WriteString(fmt.Sprintf("\t\treturn err\n"))
 				sb.WriteString(fmt.Sprintf("\t}\n"))
 			}
@@ -622,6 +634,12 @@ func toCamelCase(s string) string {
 // toPascalCase converts snake_case to PascalCase
 func toPascalCase(s string) string {
 	return toCamelCase(s)
+}
+
+// quoteSQLIdentifier quotes a SQL identifier for PostgreSQL (wraps in double quotes)
+// This is necessary for reserved keywords like "user", "order", etc.
+func quoteSQLIdentifier(identifier string) string {
+	return fmt.Sprintf("\"%s\"", identifier)
 }
 
 // mapSQLTypeToGo converts SQL type string to Go type

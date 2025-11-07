@@ -163,6 +163,99 @@ func TestGetTableName(t *testing.T) {
 	}
 }
 
+func TestGetTableNameWithCustomTableName(t *testing.T) {
+	model := &ParsedModel{
+		Name:      "UserProfile",
+		TableName: "custom_users",
+	}
+
+	tableName := model.GetTableName()
+	expected := "custom_users"
+	if tableName != expected {
+		t.Errorf("Expected table name '%s', got '%s'", expected, tableName)
+	}
+}
+
+func TestParseTableNameMethod(t *testing.T) {
+	tmpDir := t.TempDir()
+	modelsDir := filepath.Join(tmpDir, "models")
+	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+		t.Fatalf("Failed to create models directory: %v", err)
+	}
+
+	modelFile := filepath.Join(modelsDir, "user.go")
+	content := `package models
+
+const AuthUserTableName string = "auth_customuser"
+
+type AuthUser struct {
+	ID uint ` + "`gorm:\"primaryKey\"`" + `
+}
+
+func (AuthUser) TableName() string {
+	return AuthUserTableName
+}
+`
+	if err := os.WriteFile(modelFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write model file: %v", err)
+	}
+
+	models, err := ParseModelsFromDir(modelsDir, nil)
+	if err != nil {
+		t.Fatalf("ParseModelsFromDir failed: %v", err)
+	}
+
+	authUser := findModel(models, "AuthUser")
+	if authUser == nil {
+		t.Fatal("AuthUser model not found")
+	}
+
+	tableName := authUser.GetTableName()
+	expected := "auth_customuser"
+	if tableName != expected {
+		t.Errorf("Expected table name '%s', got '%s'", expected, tableName)
+	}
+}
+
+func TestParseTableNameMethodWithStringLiteral(t *testing.T) {
+	tmpDir := t.TempDir()
+	modelsDir := filepath.Join(tmpDir, "models")
+	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+		t.Fatalf("Failed to create models directory: %v", err)
+	}
+
+	modelFile := filepath.Join(modelsDir, "user.go")
+	content := `package models
+
+type User struct {
+	ID uint ` + "`gorm:\"primaryKey\"`" + `
+}
+
+func (User) TableName() string {
+	return "custom_users"
+}
+`
+	if err := os.WriteFile(modelFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write model file: %v", err)
+	}
+
+	models, err := ParseModelsFromDir(modelsDir, nil)
+	if err != nil {
+		t.Fatalf("ParseModelsFromDir failed: %v", err)
+	}
+
+	user := findModel(models, "User")
+	if user == nil {
+		t.Fatal("User model not found")
+	}
+
+	tableName := user.GetTableName()
+	expected := "custom_users"
+	if tableName != expected {
+		t.Errorf("Expected table name '%s', got '%s'", expected, tableName)
+	}
+}
+
 func TestToSnakeCase_IDHandling(t *testing.T) {
 	// Test that ID field converts to "id" (lowercase), not "i_d"
 	model := &ParsedModel{
