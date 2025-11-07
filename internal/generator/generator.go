@@ -23,6 +23,202 @@ type Generator struct {
 	packageName   string
 }
 
+// GenerateMigrator generates migrator/main.go boilerplate
+// mainPkgPath is the base path for the migrator (e.g., "cmd" results in "cmd/migrator")
+func GenerateMigrator(mainPkgPath, packageName, modulePath string) (string, error) {
+	migratorDir := filepath.Join(mainPkgPath, "migrator")
+	if err := os.MkdirAll(migratorDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create migrator directory: %w", err)
+	}
+
+	mainFile := filepath.Join(migratorDir, "main.go")
+	content := fmt.Sprintf(`package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"strings"
+
+	"github.com/pankajredekar/goosegorm"
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	
+	// Import migrations to trigger their init() functions
+	_ "%s/%s"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: migrator <command>")
+		fmt.Println("Commands: migrate, rollback, show")
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+	configPath := "goosegorm.yml"
+	
+	// Simple config loading (inline to avoid internal package dependency)
+	type Config struct {
+		DatabaseURL    string
+		MigrationTable string
+	}
+	
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Fatalf("goosegorm.yml not found. Run 'goosegorm init' first")
+	}
+	
+	// Simple YAML parsing for database_url and migration_table
+	cfg := Config{
+		DatabaseURL:    "sqlite://:memory:",
+		MigrationTable: "_goosegorm_migrations",
+	}
+	lines := strings.Split(string(configData), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "database_url:") {
+			cfg.DatabaseURL = strings.TrimSpace(strings.TrimPrefix(line, "database_url:"))
+		} else if strings.HasPrefix(line, "migration_table:") {
+			cfg.MigrationTable = strings.TrimSpace(strings.TrimPrefix(line, "migration_table:"))
+		}
+	}
+
+	// Connect to database
+	db, err := connectDB(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %%v", err)
+	}
+
+	// Initialize versioner using public API
+	ver := goosegorm.NewVersioner(db, cfg.MigrationTable)
+	if err := ver.Initialize(); err != nil {
+		log.Fatalf("Failed to initialize version table: %%v", err)
+	}
+
+	// Get the global registry (migrations register themselves via init())
+	registry := goosegorm.GetGlobalRegistry()
+
+	// Create runner using public API
+	run := goosegorm.NewRunner(db, registry, ver)
+
+	switch command {
+	case "migrate":
+		// Get pending migrations
+		pending, err := run.GetPendingMigrations()
+		if err != nil {
+			log.Fatalf("Failed to get pending migrations: %%v", err)
+		}
+
+		if len(pending) == 0 {
+			fmt.Println("No pending migrations")
+			return
+		}
+
+		fmt.Printf("Applying %%d migration(s)...\n", len(pending))
+
+		// Apply migrations
+		if err := run.Migrate(); err != nil {
+			log.Fatalf("Failed to apply migrations: %%v", err)
+		}
+
+		fmt.Printf("Applied %%d migration(s)\n", len(pending))
+
+	case "rollback":
+		n := 1
+		if len(os.Args) > 2 {
+			if _, err := fmt.Sscanf(os.Args[2], "%%d", &n); err != nil {
+				log.Fatalf("Invalid number: %%v", err)
+			}
+		}
+
+		// Get applied count
+		appliedCount, err := ver.GetAppliedCount()
+		if err != nil {
+			log.Fatalf("Failed to get applied count: %%v", err)
+		}
+
+		if appliedCount == 0 {
+			fmt.Println("No migrations to rollback")
+			return
+		}
+
+		if int64(n) > appliedCount {
+			n = int(appliedCount)
+		}
+
+		fmt.Printf("Rolling back %%d migration(s)...\n", n)
+
+		// Rollback
+		if err := run.Rollback(n); err != nil {
+			log.Fatalf("Failed to rollback: %%v", err)
+		}
+
+		fmt.Printf("Rolled back %%d migration(s)\n", n)
+
+	case "show":
+		// Get applied migrations
+		applied, err := run.GetAppliedMigrations()
+		if err != nil {
+			log.Fatalf("Failed to get applied migrations: %%v", err)
+		}
+
+		// Get pending migrations
+		pending, err := run.GetPendingMigrations()
+		if err != nil {
+			log.Fatalf("Failed to get pending migrations: %%v", err)
+		}
+
+		fmt.Println("\n" + strings.Repeat("=", 60))
+		fmt.Println("Migration Status")
+		fmt.Println(strings.Repeat("=", 60))
+
+		if len(applied) > 0 {
+			fmt.Println("\n✓ Applied Migrations:")
+			for _, m := range applied {
+				fmt.Printf("  %%s - %%s\n", m.Version(), m.Name())
+			}
+		} else {
+			fmt.Println("\n✓ Applied Migrations: (none)")
+		}
+
+		if len(pending) > 0 {
+			fmt.Println("\n○ Pending Migrations:")
+			for _, m := range pending {
+				fmt.Printf("  %%s - %%s\n", m.Version(), m.Name())
+			}
+		} else {
+			fmt.Println("\n○ Pending Migrations: (none)")
+		}
+
+		fmt.Println()
+
+	default:
+		fmt.Printf("Unknown command: %%s\n", command)
+		fmt.Println("Commands: migrate, rollback, show")
+		os.Exit(1)
+	}
+}
+
+func connectDB(databaseURL string) (*gorm.DB, error) {
+	if strings.Contains(databaseURL, "postgres://") || strings.Contains(databaseURL, "postgresql://") {
+		return gorm.Open(postgres.Open(databaseURL), &gorm.Config{})
+	} else if strings.Contains(databaseURL, "sqlite://") {
+		path := strings.TrimPrefix(databaseURL, "sqlite://")
+		return gorm.Open(sqlite.Open(path), &gorm.Config{})
+	}
+	return nil, fmt.Errorf("unsupported database URL: %%s", databaseURL)
+}
+`, modulePath, packageName)
+
+	if err := os.WriteFile(mainFile, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write migrator main.go: %w", err)
+	}
+
+	return mainFile, nil
+}
+
 // NewGenerator creates a new migration generator
 func NewGenerator(migrationsDir, packageName string) *Generator {
 	return &Generator{
@@ -502,4 +698,95 @@ func needsTimeImport(diffs []diff.Diff) bool {
 		}
 	}
 	return false
+}
+
+// buildCreateTableSQL builds CREATE TABLE SQL statement
+func buildCreateTableSQL(tableName string, columns []*diff.ColumnDiff) string {
+	var parts []string
+	for _, col := range columns {
+		colDef := buildColumnDefinition(col)
+		parts = append(parts, colDef)
+	}
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n    %s\n)", tableName, strings.Join(parts, ",\n    "))
+}
+
+// buildColumnDefinition builds a column definition for SQL
+func buildColumnDefinition(col *diff.ColumnDiff) string {
+	var def strings.Builder
+
+	// Column name
+	def.WriteString(col.Name)
+	def.WriteString(" ")
+
+	// Column type
+	def.WriteString(mapSQLTypeToSQLType(col.Type, col.PK))
+
+	// Primary key
+	if col.PK {
+		def.WriteString(" PRIMARY KEY")
+	}
+
+	// NOT NULL
+	if !col.Null {
+		def.WriteString(" NOT NULL")
+	}
+
+	// Default value (if needed)
+	// Note: We don't have default value info in ColumnDiff, but can add it later
+
+	return def.String()
+}
+
+// mapSQLTypeToSQLType converts our internal SQL type to actual SQL type
+func mapSQLTypeToSQLType(sqlType string, isPK bool) string {
+	switch sqlType {
+	case "bigint":
+		if isPK {
+			return "BIGINT"
+		}
+		return "BIGINT"
+	case "integer":
+		return "INTEGER"
+	case "smallint":
+		return "SMALLINT"
+	case "tinyint":
+		return "TINYINT"
+	case "string":
+		return "VARCHAR(255)"
+	case "float":
+		return "DOUBLE PRECISION"
+	case "bool":
+		return "BOOLEAN"
+	case "timestamp":
+		return "TIMESTAMP"
+	default:
+		return "VARCHAR(255)"
+	}
+}
+
+// buildAddColumnSQL builds ALTER TABLE ADD COLUMN SQL
+func buildAddColumnSQL(tableName string, col *diff.ColumnDiff) string {
+	colDef := buildColumnDefinition(col)
+	return fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", tableName, colDef)
+}
+
+// buildDropColumnSQL builds ALTER TABLE DROP COLUMN SQL
+func buildDropColumnSQL(tableName, columnName string) string {
+	return fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", tableName, columnName)
+}
+
+// buildModifyColumnSQL builds ALTER TABLE ALTER COLUMN SQL
+func buildModifyColumnSQL(tableName string, col *diff.ColumnDiff) string {
+	// Note: SQL syntax varies by database, using PostgreSQL syntax
+	sqlType := mapSQLTypeToSQLType(col.Type, col.PK)
+	nullClause := ""
+	if !col.Null {
+		nullClause = " NOT NULL"
+	}
+	return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s%s", tableName, col.Name, sqlType, nullClause)
+}
+
+// buildDropTableSQL builds DROP TABLE SQL
+func buildDropTableSQL(tableName string) string {
+	return fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
 }

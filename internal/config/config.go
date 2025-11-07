@@ -15,6 +15,7 @@ type Config struct {
 	PackageName    string   `yaml:"package_name"`
 	MigrationTable string   `yaml:"migration_table"`
 	IgnoreModels   []string `yaml:"ignore_models"`
+	BuildPath      string   `yaml:"build_path"` // Optional: Path to save migrator binary for production use
 }
 
 func LoadConfig(configPath string) (*Config, error) {
@@ -35,6 +36,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	if cfg.PackageName == "" {
 		cfg.PackageName = "migrations"
 	}
+	// MainPkgPath is deprecated and no longer used - kept for backward compatibility
 
 	// Resolve relative paths
 	if !filepath.IsAbs(cfg.ModelsDir) {

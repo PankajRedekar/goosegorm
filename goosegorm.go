@@ -3,6 +3,7 @@ package goosegorm
 import (
 	"github.com/pankajredekar/goosegorm/internal/runner"
 	"github.com/pankajredekar/goosegorm/internal/schema"
+	"github.com/pankajredekar/goosegorm/internal/versioner"
 	"gorm.io/gorm"
 )
 
@@ -37,6 +38,9 @@ func GetGlobalRegistry() *runner.Registry {
 	return globalRegistry
 }
 
+// GlobalRegistry is exported for plugin loading
+var GlobalRegistry = globalRegistry
+
 // SetGlobalRegistry sets the global registry (for testing)
 func SetGlobalRegistry(reg *runner.Registry) {
 	globalRegistry = reg
@@ -55,4 +59,19 @@ func AsSchemaBuilder(db interface{}) (*schema.SchemaBuilder, bool) {
 		return sb, true
 	}
 	return nil, false
+}
+
+// Export versioner and runner types for migrator
+type Versioner = versioner.Versioner
+type Runner = runner.Runner
+type Registry = runner.Registry
+
+// NewVersioner creates a new versioner (exported for migrator)
+func NewVersioner(db *gorm.DB, tableName string) *Versioner {
+	return versioner.NewVersioner(db, tableName)
+}
+
+// NewRunner creates a new runner (exported for migrator)
+func NewRunner(db *gorm.DB, registry *Registry, ver *Versioner) *Runner {
+	return runner.NewRunner(db, registry, ver)
 }

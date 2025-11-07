@@ -8,8 +8,10 @@ Django-style migration framework for GORM — pure Go, no SQL files, no external
 - ✅ In-memory schema simulation (SchemaBuilder)
 - ✅ Model-level control with `goosegorm:"managed:false"`
 - ✅ Automatic migration generation from model changes
+- ✅ Temporary compiled migrator for reliable execution (auto-generated and cleaned up)
 - ✅ Version tracking in database
 - ✅ Rollback support
+- ✅ Full GORM struct support (real compiled code, not AST interpretation)
 
 ## Installation
 
@@ -58,6 +60,13 @@ go run github.com/pankajredekar/goosegorm/cmd/goosegorm
    ```bash
    goosegorm migrate
    ```
+   
+   This will:
+   - Create a temporary migrator package (`.goosegorm_migrator`)
+   - Build the migrator binary
+   - Run the compiled migrator to execute migrations
+   - Automatically clean up the temporary package
+   - Execute migrations using real compiled code with proper struct definitions
 
 ## Configuration (goosegorm.yml)
 
@@ -69,6 +78,8 @@ package_name: migrations
 migration_table: _goosegorm_migrations
 ignore_models: []
 ```
+
+**Note:** The `main_pkg_path` option is no longer used. Migrations are executed using a temporary compiled migrator that is automatically created and cleaned up during the `migrate` command.
 
 **Supported databases:**
 - SQLite: `sqlite://:memory:` (in-memory) or `sqlite://./db.sqlite` (file)
@@ -86,6 +97,50 @@ type LegacyTransaction struct {
     Note string
 }
 ```
+
+## How It Works
+
+### Temporary Compiled Migrator Approach
+
+GooseGORM uses a **temporary compiled migrator** approach for reliable migration execution:
+
+1. **Migration Generation**: `goosegorm makemigrations` generates:
+   - Migration files in `migrations/` directory
+   - No permanent migrator files are created
+
+2. **Migration Execution**: `goosegorm migrate`:
+   - Creates a temporary package (`.goosegorm_migrator`) in the same directory as `goosegorm.yml`
+   - Generates `main.go` that imports your migrations package
+   - Creates `go.mod` with proper dependencies and replace directives
+   - Builds the migrator binary
+   - Runs the compiled migrator to execute migrations
+   - Automatically deletes the temporary package after execution
+   - Migrations register themselves via `init()` functions
+   - Real compiled code executes with proper struct definitions
+
+**Benefits:**
+- ✅ Real compiled Go code (not AST interpretation)
+- ✅ Proper struct definitions work correctly
+- ✅ Full GORM feature support
+- ✅ Works on all platforms (Windows, Linux, macOS)
+- ✅ Type-safe and reliable
+- ✅ No project pollution - temporary files are automatically cleaned up
+- ✅ No permanent migrator files in your project
+
+### Generated Files
+
+After running `goosegorm makemigrations`, you'll have:
+
+```
+your-project/
+├── migrations/
+│   ├── 202511070928440001_create_product.go
+│   └── 202511070928440002_add_index.go
+└── models/
+    └── product.go
+```
+
+**Note:** No permanent migrator files are generated. During `goosegorm migrate`, a temporary `.goosegorm_migrator` directory is created, used, and automatically deleted. This keeps your project clean while still using real compiled code for reliable migration execution.
 
 ## Migration Format
 
@@ -105,19 +160,28 @@ func (m AddEmailToUsers) Version() string { return "20251107193000" }
 func (m AddEmailToUsers) Name() string    { return "add_email_to_users" }
 
 func (m AddEmailToUsers) Up(db *gorm.DB) error {
+    // Simulation mode (for makemigrations)
     if sim, ok := any(db).(*goosegorm.SchemaBuilder); ok {
         sim.AlterTable("users").AddColumn("email", "string")
         return nil
     }
-    return db.Migrator().AddColumn(&User{}, "Email")
+    
+    // Real DB mode (compiled migrator execution)
+    type UserEmail struct {
+        Email string `gorm:"column:email;size:255"`
+    }
+    return db.Table("users").Migrator().AddColumn(&UserEmail{}, "email")
 }
 
 func (m AddEmailToUsers) Down(db *gorm.DB) error {
+    // Simulation mode (for makemigrations)
     if sim, ok := any(db).(*goosegorm.SchemaBuilder); ok {
         sim.AlterTable("users").DropColumn("email")
         return nil
     }
-    return db.Migrator().DropColumn(&User{}, "Email")
+    
+    // Real DB mode (compiled migrator execution)
+    return db.Migrator().DropColumn("users", "email")
 }
 
 func init() {
@@ -135,8 +199,9 @@ func init() {
 
 ## Examples
 
-The repository includes a complete example in the `examples/` folder:
+The repository includes complete examples in the `examples/` folder:
 
+### Basic Example (`examples/`)
 - **`examples/models/user.go`** - Example User model with GORM tags, indexes, and soft deletes
 - **`examples/migrations/`** - Example migration files showing:
   - Creating tables with columns and options
@@ -144,7 +209,21 @@ The repository includes a complete example in the `examples/` folder:
   - Adding columns to existing tables
 - **`examples/goosegorm.yml.example`** - Example configuration file
 
-You can explore these examples to see how migrations are structured and how the dual execution mode (simulation vs real DB) works.
+### Full App Example (`examples/app/`)
+A complete working application demonstrating the temporary compiled migrator approach:
+
+- **`examples/app/models/`** - Product and Category models
+- **`examples/app/migrations/`** - Generated migrations with GORM struct definitions
+- **`examples/app/goosegorm.yml`** - Configuration using SQLite file database
+
+To test the example app:
+```bash
+cd examples/app
+goosegorm makemigrations  # Generates migration files only
+goosegorm migrate         # Creates temporary migrator, runs migrations, cleans up
+```
+
+You can explore these examples to see how migrations are structured and how the temporary compiled migrator approach works with real GORM struct definitions. Notice that no permanent migrator files are created - the migrator is generated temporarily during `migrate` and automatically deleted afterward.
 
 ## License
 

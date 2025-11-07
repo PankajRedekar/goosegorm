@@ -1,7 +1,7 @@
 database_url: sqlite://./app.db
-models_dir: ./models
-migrations_dir: ./migrations
-package_name: migrations
-migration_table: _goosegorm_migrations
+build_path: ./bin/goosegorm
 ignore_models: []
-
+migration_table: _goosegorm_migrations
+migrations_dir: ./migrations
+models_dir: ./models
+package_name: migrations

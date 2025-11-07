@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,6 +158,35 @@ func generateMigrationName(diffs []diff.Diff) string {
 func loadMigrationsFromDir(dir string, packageName string) (*runner.Registry, error) {
 	// Use the loader package to load migrations
 	return loader.LoadMigrationsFromAST(dir, packageName)
+}
+
+// findModulePath finds the module path from go.mod
+func findModulePath(dir string) (string, error) {
+	goModPath := filepath.Join(dir, "go.mod")
+	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
+		// Try parent directory
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("go.mod not found")
+		}
+		return findModulePath(parent)
+	}
+
+	content, err := os.ReadFile(goModPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Simple parsing: find "module " line
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module")), nil
+		}
+	}
+
+	return "", fmt.Errorf("module path not found in go.mod")
 }
 
 func init() {

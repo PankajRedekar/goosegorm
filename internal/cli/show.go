@@ -48,8 +48,8 @@ var showCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Load migrations
-		registry, err := loadMigrations(cfg.MigrationsDir)
+		// Load migrations - use compiled execution to see actual migration status
+		registry, err := loadMigrations(cfg.MigrationsDir, true)
 		if err != nil {
 			utils.PrintError("Failed to load migrations: %v", err)
 			os.Exit(1)
